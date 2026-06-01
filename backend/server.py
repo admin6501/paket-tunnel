@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -65,6 +66,34 @@ async def get_status_checks():
             check['timestamp'] = datetime.fromisoformat(check['timestamp'])
     
     return status_checks
+
+# --- PerseTunnel artifact downloads ---
+DIST_DIR = Path("/app/dist")
+ALLOWED_FILES = {
+    "persetunnel-offline-amd64.run",
+    "persetunnel-offline-arm64.run",
+    "persetunnel-linux-amd64",
+    "persetunnel-linux-arm64",
+}
+
+@api_router.get("/downloads")
+async def list_downloads():
+    files = []
+    for name in sorted(ALLOWED_FILES):
+        p = DIST_DIR / name
+        if p.exists():
+            files.append({"name": name, "size_bytes": p.stat().st_size,
+                          "url": f"/api/download/{name}"})
+    return {"files": files}
+
+@api_router.get("/download/{name}")
+async def download_file(name: str):
+    if name not in ALLOWED_FILES:
+        raise HTTPException(status_code=404, detail="file not allowed")
+    p = DIST_DIR / name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(path=str(p), filename=name, media_type="application/octet-stream")
 
 # Include the router in the main app
 app.include_router(api_router)
