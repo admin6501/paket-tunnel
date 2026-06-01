@@ -55,3 +55,10 @@
 - فایل‌ها: /app/tunnel-core/{main,tls,server,client}.go ، /app/install.sh (خودکفا: Go+سورس embed، build، systemd، sysctl BBR+بافر UDP)
 - تست: build از سورس embed‌شده موفق؛ E2E موفق؛ احراز هویت کلید اشتباه رد؛ ۶۰ دانلود همزمان ۱۰۰MB → ۶۰/۶۰ موفق؛ throughput تک‌جریانی ~1.3Gbps.
 - نکته: پورت تانل باید UDP باز باشد (ufw + Security Group).
+
+## Offline Install (2026-06-01)
+- مشکل: سرور ایران نمی‌تواند Go و ماژول‌ها را دانلود کند (اینترنت محدود/کند).
+- راه‌حل: باینری استاتیک کراس‌کامپایل‌شده (CGO_ENABLED=0) برای amd64/arm64 + نصب‌کنندهٔ آفلاین بدون شبکه.
+- فایل‌ها (/app/dist): persetunnel-linux-{amd64,arm64} (خام)، persetunnel-offline-{amd64,arm64}.run (تک‌فایل خوداستخراج با base64 embed)، /app/install-offline.sh (لاجیک، باینری محلی).
+- self-extract: مارکر __PT_PAYLOAD__ + exit 0 قبل از payload؛ استخراج از $SELF با tail+base64 -d.
+- تست: payload بایت‌به‌بایت یکسان (sha256)؛ نصب آفلاین خوداستخراج foreign + E2E واقعی موفق؛ بدون هیچ دانلودی.

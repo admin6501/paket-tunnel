@@ -58,3 +58,43 @@ sudo bash install.sh foreign|iran|status|restart|token|uninstall
 ---
 ### جایگزین TCP-محور
 `tunnel.sh` (موتور GOST، ترابری‌های mwss/quic/kcp) هم در همین مخزن هست؛ اگر مسیر شما QUIC خام را محدود می‌کند می‌تواند مفید باشد.
+
+---
+
+## 🔌 نصب آفلاین (بدون هیچ دانلودی — مخصوص سرور ایران با اینترنت محدود)
+
+اگر سرور نمی‌تواند Go و ماژول‌ها را دانلود کند، از باینریِ از پیش ساخته‌شده استفاده کن.
+
+### روش ۱ (ساده‌ترین): فایل تک، خوداستخراج
+سرورها x86_64 هستند → فایل **`dist/persetunnel-offline-amd64.run`** (۸.۴MB) را بردار.
+باینری داخلش embed شده؛ فقط همین یک فایل را به سرور منتقل کن:
+
+```bash
+# از روی سیستم خودت به سرور:
+scp dist/persetunnel-offline-amd64.run root@SERVER_IP:/root/
+
+# روی سرور (هیچ دانلودی نمی‌کند):
+sudo bash persetunnel-offline-amd64.run
+```
+(برای سرور arm64 از `persetunnel-offline-arm64.run` استفاده کن.)
+
+### روش ۲: اسکریپت + باینری جدا
+`install-offline.sh` را همراه `dist/persetunnel-linux-amd64` در یک پوشه بگذار:
+```bash
+sudo bash install-offline.sh            # باینری کنار اسکریپت را پیدا می‌کند
+# یا مسیر بده:
+sudo bash install-offline.sh --bin /path/to/persetunnel-linux-amd64
+```
+
+### نکته
+- سرور خارج (آلمان) اینترنت خوبی دارد → می‌تواند همان `install.sh` معمولی را اجرا کند.
+- فقط سرور ایران را آفلاین نصب کن. هر دو سر از همان باینری استفاده می‌کنند.
+- باینری‌ها **استاتیک** هستند (CGO_ENABLED=0) و هیچ وابستگی سیستمی ندارند.
+
+### فایل‌های آماده در `dist/`
+| فایل | توضیح |
+|---|---|
+| `persetunnel-offline-amd64.run` | نصب‌کنندهٔ تک‌فایل خوداستخراج (x86_64) |
+| `persetunnel-offline-arm64.run` | نصب‌کنندهٔ تک‌فایل خوداستخراج (arm64) |
+| `persetunnel-linux-amd64` | باینری خام (x86_64) |
+| `persetunnel-linux-arm64` | باینری خام (arm64) |
