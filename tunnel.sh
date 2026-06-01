@@ -222,15 +222,19 @@ install_foreign() {
 
   echo
   echo "نوع ترابری (Transport):"
-  echo "  1) mwss  — WebSocket+TLS+Mux  (پیشنهادی: ضدفیلتر + CPU پایین)"
-  echo "  2) mtls  — TLS+Mux            (سریع‌تر، کمی قابل‌شناسایی‌تر)"
-  echo "  3) mws   — WebSocket+Mux      (بدون TLS، مناسب پشت CDN)"
-  echo "  4) grpc  — gRPC               (مالتی‌پلکس قوی)"
-  read -rp "انتخاب [1]: " t; t="${t:-1}"
+  echo "  1) mwss  — WebSocket+TLS+Mux   (ضدفیلتر قوی، پایه TCP)"
+  echo "  2) mtls  — TLS+Mux             (سریع‌تر، پایه TCP)"
+  echo "  3) mws   — WebSocket+Mux       (بدون TLS، پشت CDN)"
+  echo "  4) grpc  — gRPC                (مالتی‌پلکس، پایه TCP)"
+  echo "  5) quic  — QUIC روی UDP         ${GRN}(پینگ پایین + CPU کم — پیشنهاد برای پینگ)${RST}"
+  echo "  6) kcp   — KCP حالت fast روی UDP (کمترین پینگ روی خطوط پرافت، CPU کمی بیشتر)"
+  echo -e "  ${YLW}توجه:${RST} گزینه‌های ۵ و ۶ (UDP) معمولاً پینگ بهتری می‌دهند؛ اگر اپراتورت UDP را محدود کرده بود، mwss را بزن."
+  read -rp "انتخاب [5]: " t; t="${t:-5}"
   case "$t" in
     1) TRANSPORT="mwss" ;; 2) TRANSPORT="mtls" ;;
     3) TRANSPORT="mws"  ;; 4) TRANSPORT="grpc" ;;
-    *) TRANSPORT="mwss" ;;
+    5) TRANSPORT="quic" ;; 6) TRANSPORT="kcp"  ;;
+    *) TRANSPORT="quic" ;;
   esac
 
   read -rp "آیا UDP هم تانل شود؟ (برای WireGuard/برخی V2Ray) [y/N]: " udp
@@ -246,6 +250,8 @@ install_foreign() {
   local LISTEN
   case "$TRANSPORT" in
     grpc) LISTEN="grpc://${USER}:${PASS}@:${TPORT}" ;;
+    quic) LISTEN="quic://${USER}:${PASS}@:${TPORT}?keepalive=true&ttl=10" ;;
+    kcp)  LISTEN="kcp://${USER}:${PASS}@:${TPORT}?mode=fast3&keepalive=true&nodelay=1&interval=10&resend=2&nc=1" ;;
     *)    LISTEN="${TRANSPORT}://${USER}:${PASS}@:${TPORT}?path=${WPATH}" ;;
   esac
   write_run_script "-L \"${LISTEN}\""
@@ -272,8 +278,9 @@ EOF
   echo -e "${BLD}توکن اتصال (این را کپی کن و در سرور ایران وارد کن):${RST}"
   echo -e "${GRN}${TOKEN}${RST}"
   line
-  echo "نکته امنیتی: حتماً پورت ${TPORT} را در فایروال سرور خارج باز کن."
-  echo "مثال (ufw):  ufw allow ${TPORT}/tcp"
+  local FW_PROTO="tcp"; [[ "$TRANSPORT" == "quic" || "$TRANSPORT" == "kcp" ]] && FW_PROTO="udp"
+  echo "نکته امنیتی: حتماً پورت ${TPORT}/${FW_PROTO} را در فایروال سرور خارج باز کن."
+  echo "مثال (ufw):  ufw allow ${TPORT}/${FW_PROTO}"
 }
 
 # ---------------------------- نصب سمت سرور ایران ------------------------------
@@ -302,6 +309,8 @@ install_iran() {
   local FWD
   case "$TRANSPORT" in
     grpc) FWD="grpc://${USER}:${PASS}@${FOREIGN}:${TPORT}" ;;
+    quic) FWD="quic://${USER}:${PASS}@${FOREIGN}:${TPORT}?keepalive=true&ttl=10" ;;
+    kcp)  FWD="kcp://${USER}:${PASS}@${FOREIGN}:${TPORT}?mode=fast3&keepalive=true&nodelay=1&interval=10&resend=2&nc=1" ;;
     *)    FWD="${TRANSPORT}://${USER}:${PASS}@${FOREIGN}:${TPORT}?path=${WPATH}" ;;
   esac
 

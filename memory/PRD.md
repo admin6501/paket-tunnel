@@ -35,3 +35,11 @@
 - علت: `rand_str` از /dev/urandom بی‌نهایت به `head` پایپ می‌کرد؛ تحت `set -o pipefail` کشته‌شدن `tr` با SIGPIPE کل اسکریپت را می‌بست.
 - رفع: بازنویسی `rand_str` با خواندن بلوک‌های محدود (head -c 64) و برش با bsub؛ و تبدیل `grep|head` به `grep -m1` در نصب GOST.
 - تست: فلوی کامل foreign (UDP=y) و iran با موفقیت تا تولید/decode توکن و ساخت دستور اجرا شد.
+
+## Latency Improvement (2026-06-01)
+- مشکل کاربر: پینگ بالا با ترابری mwss (TCP) به‌علت TCP-over-TCP meltdown روی مسیر پرافت ایران↔خارج.
+- افزودن ترابری‌های UDP-محور به اسکریپت برای کاهش پینگ:
+  - quic (پیش‌فرض جدید): keepalive=true&ttl=10 — پینگ پایین + CPU کم
+  - kcp حالت fast3: nodelay=1&interval=10&resend=2&nc=1 — کمترین پینگ روی خطوط پرافت
+- نکتهٔ فایروال برای quic/kcp به udp تغییر کرد.
+- تست: نصب foreign/iran با quic + عبور ترافیک واقعی از تانل QUIC ساخته‌شده توسط اسکریپت موفق بود.
