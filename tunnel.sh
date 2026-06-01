@@ -86,10 +86,10 @@ install_gost() {
   }
   if command -v jq >/dev/null 2>&1; then
     tag="$(echo "$api" | jq -r '.tag_name')"
-    url="$(echo "$api" | jq -r ".assets[].browser_download_url" | grep -E "linux_${arch}\.tar\.gz$" | head -n1)"
+    url="$(echo "$api" | jq -r ".assets[].browser_download_url" | grep -m1 -E "linux_${arch}\.tar\.gz$")"
   else
-    tag="$(echo "$api" | grep -oE '"tag_name": *"[^"]+"' | head -n1 | sed -E 's/.*"([^"]+)"$/\1/')"
-    url="$(echo "$api" | grep -oE 'https://[^"]+linux_'"${arch}"'\.tar\.gz' | head -n1)"
+    tag="$(echo "$api" | grep -m1 -oE '"tag_name": *"[^"]+"' | sed -E 's/.*"([^"]+)"$/\1/')"
+    url="$(echo "$api" | grep -m1 -oE 'https://[^"]+linux_'"${arch}"'\.tar\.gz')"
   fi
 
   [[ -z "${url:-}" || "$url" == "null" ]] && { err "لینک دانلود مناسب پیدا نشد (arch=$arch)."; exit 1; }
@@ -152,7 +152,14 @@ EOF
 }
 
 # ----------------------- کمک‌توابع توکن/رمز -----------------------------------
-rand_str() { tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "${1:-16}"; }
+rand_str() {
+  # تولید رشتهٔ تصادفی بدون SIGPIPE (سازگار با set -o pipefail)
+  local n="${1:-16}" out=""
+  while [[ "${#out}" -lt "$n" ]]; do
+    out+="$(LC_ALL=C tr -dc 'a-zA-Z0-9' < <(head -c 64 /dev/urandom))"
+  done
+  printf '%s' "${out:0:n}"
+}
 
 # token format (base64):  v1|TPORT|USER|PASS|PATH|TRANSPORT|SVCHOST|SVCPORT|UDP
 make_token() {

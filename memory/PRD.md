@@ -29,3 +29,9 @@
 - P1: گزینهٔ دامنه + cert واقعی (Let's Encrypt) برای wss روی پورت 443
 - P2: load-balancing چند سرور خارج (tunnel.weight)
 - P2: مانیتورینگ پینگ/throughput و هلث‌چک خودکار
+
+## Bug Fix (2026-06-01)
+- باگ: بعد از سؤال UDP، اسکریپت با کد 141 (SIGPIPE) خارج می‌شد.
+- علت: `rand_str` از /dev/urandom بی‌نهایت به `head` پایپ می‌کرد؛ تحت `set -o pipefail` کشته‌شدن `tr` با SIGPIPE کل اسکریپت را می‌بست.
+- رفع: بازنویسی `rand_str` با خواندن بلوک‌های محدود (head -c 64) و برش با bsub؛ و تبدیل `grep|head` به `grep -m1` در نصب GOST.
+- تست: فلوی کامل foreign (UDP=y) و iran با موفقیت تا تولید/decode توکن و ساخت دستور اجرا شد.
