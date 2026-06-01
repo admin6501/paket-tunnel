@@ -1,0 +1,31 @@
+# PRD — GOST Tunnel Manager (Iran <-> Foreign)
+
+## Problem Statement
+کاربر یک تانل بین سرور ایران و سرور خارج می‌خواهد که در ساعات اوج، پینگ و سرعت افت نکند و CPU درگیر نشود + یک اسکریپت bash نصب اتوماتیک.
+
+## User Choices
+- نوع تانل: TCP/WebSocket reverse tunnel (پیاده‌سازی با GOST v3)
+- OS: Ubuntu/Debian
+- ترافیک: یک پورت/سرویس خاص (پنل V2Ray / SSH)
+- اولویت: پینگ + سرعت + CPU پایین (هر سه)
+- اسکریپت تعاملی
+
+## Architecture
+- Engine: GOST v3 (go-gost), باینری از GitHub releases (amd64/arm64/armv7)
+- Transport پیش‌فرض: mwss (WebSocket + TLS + Multiplexing) — ضدفیلتر + CPU پایین
+- سرور خارج (Exit): listener پروکسی mwss روی پورت تانل + سرویس داخلی روی 127.0.0.1
+- سرور ایران (Entry): پورت محلی -> forward از طریق تانل به سرویس خارج
+- توکن base64 برای انتقال آسان اعتبارنامه‌ها بین دو سرور
+- systemd service با Restart=always (ضد قطعی) + سیستم تیونینگ BBR و بافرها
+
+## Implemented (2026-06-01)
+- /app/tunnel.sh: منوی تعاملی + حالت آرگومانی (foreign/iran/status/restart/token/uninstall)
+- نصب خودکار GOST، تیونینگ کرنل (sysctl BBR + nofile limits)، systemd
+- /app/README.md: مستندات فارسی
+- تست end-to-end تانل داخل کانتینر: موفق (HELLO_FROM_FOREIGN_SERVICE از طریق mwss)
+- تست round-trip توکن: موفق
+
+## Backlog / Future
+- P1: گزینهٔ دامنه + cert واقعی (Let's Encrypt) برای wss روی پورت 443
+- P2: load-balancing چند سرور خارج (tunnel.weight)
+- P2: مانیتورینگ پینگ/throughput و هلث‌چک خودکار
