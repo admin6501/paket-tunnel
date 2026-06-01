@@ -43,3 +43,15 @@
   - kcp حالت fast3: nodelay=1&interval=10&resend=2&nc=1 — کمترین پینگ روی خطوط پرافت
 - نکتهٔ فایروال برای quic/kcp به udp تغییر کرد.
 - تست: نصب foreign/iran با quic + عبور ترافیک واقعی از تانل QUIC ساخته‌شده توسط اسکریپت موفق بود.
+
+## Custom Core: PerseTunnel (2026-06-01)
+- درخواست کاربر: هستهٔ تانل اختصاصی چون gRPC زیر بار سنگین (آسیاتک↔آلمان) افت پینگ/سرعت داشت.
+- پیاده‌سازی: تانل اختصاصی Go روی QUIC (quic-go v0.59.1) با:
+  - Connection Pool (N سشن موازی، پخش بار روی کم‌بارترین) → حذف گلوگاه تک‌کانکشن
+  - QUIC per-stream flow control → حذف HOL blocking
+  - پنجره‌های بزرگ (stream 16MB / conn 64MB) → throughput بالا روی BDP بالا
+  - TLS1.3 + ALPN h3 + SNI دلخواه (استتار) + احراز هویت توکن ۳۲ بایتی constant-time
+  - اتصال مجدد خودکار + keepalive
+- فایل‌ها: /app/tunnel-core/{main,tls,server,client}.go ، /app/install.sh (خودکفا: Go+سورس embed، build، systemd، sysctl BBR+بافر UDP)
+- تست: build از سورس embed‌شده موفق؛ E2E موفق؛ احراز هویت کلید اشتباه رد؛ ۶۰ دانلود همزمان ۱۰۰MB → ۶۰/۶۰ موفق؛ throughput تک‌جریانی ~1.3Gbps.
+- نکته: پورت تانل باید UDP باز باشد (ufw + Security Group).
