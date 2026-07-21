@@ -1,0 +1,12 @@
+[Unit]
+Description=Spoof-Tunnel watchdog (auto-restart on link failure)
+After=spooftun.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spoof-watchdog.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

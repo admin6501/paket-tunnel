@@ -1,0 +1,15 @@
+[Unit]
+Description=Spoof-Tunnel core (raw spoofed carrier for WireGuard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/spoof-tunnel/config
+ExecStart=/usr/local/bin/spooftun run --carrier ${CARRIER} --peer ${PEER_PUBLIC_IP} --spoof ${SPOOF_SRC} --iface ${PUB_IFACE} --lport ${LOCAL_PORT} --wgport ${WG_PORT} --cport ${CARRIER_PORT} --magic ${MAGIC}
+Restart=always
+RestartSec=2
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
