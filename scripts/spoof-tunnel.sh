@@ -3,13 +3,13 @@
 # spoof-tunnel.sh - Interactive management CLI for the Spoof-Tunnel
 # (Iran relay  <->  foreign exit) built on source-spoofed ICMP/UDP + WireGuard.
 #
-# Requires: root, whiptail, wireguard-tools, iproute2, iptables.
+# Requires: root, wireguard-tools, iproute2, iptables. (plain-text menu, no whiptail)
 # Target OS: Ubuntu 22.04.
 #
-# NOTE: This is an interactive whiptail menu. We deliberately do NOT use
-# 'set -e'/'set -u' here: many commands legitimately return non-zero (whiptail
-# Cancel/ESC, ping failures, 'iptables -C' existence checks, '[[ ]] &&' guards),
-# and errexit would make the whole menu exit silently. We keep pipefail only.
+# NOTE: This is an interactive text menu. We deliberately do NOT use
+# 'set -e'/'set -u' here: many commands legitimately return non-zero
+# (menu cancel, existence checks, '[[ ]] && cmd' guards), and errexit
+# would make the whole menu exit silently. We keep pipefail only.
 set -o pipefail
 
 # --------------------------------------------------------------------------
@@ -29,8 +29,14 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # to /usr/local/bin and the source tree lives elsewhere.
 ASSET_DIRS=("$REPO_DIR" "/opt/paket-tunnel" "/opt/spoof-tunnel")
 
-# whiptail sizing
-WT_H=20; WT_W=76; WT_MH=12
+# ---- text UI palette (no whiptail dependency) ----
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'; C_B=$'\033[1m'; C_DIM=$'\033[2m'
+  C_CYAN=$'\033[36m'; C_GREEN=$'\033[32m'; C_YEL=$'\033[33m'
+  C_RED=$'\033[31m'; C_BLUE=$'\033[34m'; C_MAG=$'\033[35m'
+else
+  C_RESET=""; C_B=""; C_DIM=""; C_CYAN=""; C_GREEN=""; C_YEL=""; C_RED=""; C_BLUE=""; C_MAG=""
+fi
 
 # --------------------------------------------------------------------------
 # Config defaults
@@ -60,8 +66,26 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 need_root() { [[ $EUID -eq 0 ]] || die "Run as root (sudo)."; }
 
-msg()  { whiptail --title "Spoof-Tunnel" --msgbox "$1" "${2:-$WT_H}" "$WT_W"; }
-yesno(){ whiptail --title "Spoof-Tunnel" --yesno "$1" "${2:-$WT_H}" "$WT_W"; }
+hr() { printf "${C_DIM}──────────────────────────────────────────────────────────${C_RESET}\n"; }
+
+banner() {
+  clear 2>/dev/null || true
+  printf "${C_CYAN}${C_B}"
+  printf "  ┌──────────────────────────────────────────────────────┐\n"
+  printf "  │           SPOOF-TUNNEL  ·  مدیریت تانل                │\n"
+  printf "  └──────────────────────────────────────────────────────┘${C_RESET}\n"
+}
+
+pause() { printf "\n${C_DIM}Enter برای بازگشت به منو...${C_RESET}"; read -r _ || true; }
+
+msg()  { printf "\n%b\n" "$1"; pause; }
+
+yesno() {
+  local ans
+  printf "\n%b ${C_YEL}[y/N]${C_RESET}: " "$1"
+  read -r ans || true
+  [[ "$ans" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
 
 detect_pub_iface() {
   ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'
@@ -101,33 +125,54 @@ EOF
   chmod 600 "$CONF_FILE"
 }
 
-input() { # prompt default -> echoes value
-  local v
-  v=$(whiptail --title "Spoof-Tunnel" --inputbox "$1" "$WT_H" "$WT_W" "$2" 3>&1 1>&2 2>&3) || return 1
-  echo "$v"
+input() { # "prompt (may contain \n)" "default" -> echoes value on stdout
+  local prompt="$1" def="${2:-}" v
+  printf "%b" "\n${prompt}" >&2
+  [[ -n "$def" ]] && printf " ${C_YEL}[%s]${C_RESET}" "$def" >&2
+  printf ": " >&2
+  read -r v || true
+  echo "${v:-$def}"
+}
+
+# choose "title" key1 desc1 key2 desc2 ... -> echoes selected key (rc 1 on cancel)
+choose() {
+  local title="$1"; shift
+  local -a keys=() descs=()
+  while [[ $# -ge 2 ]]; do keys+=("$1"); descs+=("$2"); shift 2; done
+  printf "\n${C_B}%s${C_RESET}\n" "$title" >&2
+  local i
+  for i in "${!keys[@]}"; do
+    printf "  ${C_CYAN}%2d${C_RESET}) %s\n" "$((i+1))" "${descs[$i]}" >&2
+  done
+  local ans
+  printf "\n${C_GREEN}شماره را وارد کن${C_RESET} (Enter=لغو): " >&2
+  read -r ans || true
+  [[ -z "$ans" ]] && return 1
+  if [[ "$ans" =~ ^[0-9]+$ ]] && (( ans >= 1 && ans <= ${#keys[@]} )); then
+    echo "${keys[$((ans-1))]}"; return 0
+  fi
+  return 1
 }
 
 # --------------------------------------------------------------------------
 # 1. Install & setup
 # --------------------------------------------------------------------------
 do_install() {
-  {
-    echo 10; echo "# Updating apt..."
-    apt-get update -qq >/dev/null 2>&1 || true
-    echo 40; echo "# Installing dependencies (wireguard, iproute2, iptables, build tools)..."
-    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
-        apt-get install -y -qq --no-install-recommends \
-        wireguard wireguard-tools iproute2 iptables build-essential whiptail \
-        >/dev/null 2>&1 || true
-    echo 70; echo "# Installing spooftun binary..."
-    install_binary
-    echo 85; echo "# Applying sysctl (ip_forward, rp_filter=0, BBR)..."
-    apply_sysctl
-    echo 100; echo "# Done."
-    sleep 1
-  } | whiptail --title "Install & Setup" --gauge "Starting..." 8 "$WT_W" 0
+  banner
+  printf "${C_B}۱) نصب و راه‌اندازی خودکار${C_RESET}\n"; hr
+  echo "» به‌روزرسانی apt..."
+  apt-get update -qq >/dev/null 2>&1 || true
+  echo "» نصب وابستگی‌ها (wireguard, iproute2, iptables, ...)..."
+  DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
+      apt-get install -y -qq --no-install-recommends \
+      wireguard wireguard-tools iproute2 iptables build-essential \
+      >/dev/null 2>&1 || true
+  echo "» نصب باینری spooftun..."
+  install_binary
+  echo "» اعمال sysctl (ip_forward, rp_filter=0, BBR)..."
+  apply_sysctl
   save_config
-  msg "Installation complete.\n\nBinary: ${BIN}\nConfig: ${CONF_FILE}\n\nNext: choose server role (menu 2)."
+  msg "${C_GREEN}نصب کامل شد.${C_RESET}\nBinary: ${BIN}\nConfig: ${CONF_FILE}\n\nمرحله بعد: انتخاب نقش سرور (گزینه 2)."
 }
 
 install_binary() {
@@ -185,55 +230,52 @@ EOF
 # 2. Role selection
 # --------------------------------------------------------------------------
 do_role() {
+  banner
   local r
-  r=$(whiptail --title "Server Role" --menu "Select this server's role:" "$WT_H" "$WT_W" 4 \
-      "relay" "Iran side (رله) - users connect here" \
-      "exit"  "Foreign side (اکسیت) - reaches free internet" \
-      3>&1 1>&2 2>&3) || return
+  r=$(choose "نقش این سرور را انتخاب کن:" \
+        "relay" "ایران (رله) — کاربران اینجا وصل می‌شوند" \
+        "exit"  "خارج (اکسیت) — به اینترنت آزاد می‌رسد") || return
   ROLE="$r"
   if [[ "$ROLE" == "relay" ]]; then
     WG_LOCAL_IP="10.20.20.1"; WG_PEER_IP="10.20.20.2"
   else
     WG_LOCAL_IP="10.20.20.2"; WG_PEER_IP="10.20.20.1"
   fi
-  PEER_PUBLIC_IP=$(input "Enter the PUBLIC IP of the OTHER server\n(relay enters exit's IP, exit enters relay's IP):" "$PEER_PUBLIC_IP") || return
+  PEER_PUBLIC_IP=$(input "آی‌پی عمومی سرور مقابل را وارد کن\n(رله→آی‌پی خارج، اکسیت→آی‌پی ایران):" "$PEER_PUBLIC_IP")
   save_config
-  msg "Role set: ${ROLE}\nTunnel IP (this): ${WG_LOCAL_IP}\nTunnel IP (peer): ${WG_PEER_IP}\nPeer public IP: ${PEER_PUBLIC_IP}"
+  msg "نقش: ${ROLE}\nآی‌پی تانل (این سرور): ${WG_LOCAL_IP}\nآی‌پی تانل (مقابل): ${WG_PEER_IP}\nآی‌پی عمومی مقابل: ${PEER_PUBLIC_IP}"
 }
 
 # --------------------------------------------------------------------------
 # 3. Spoof-Tester
 # --------------------------------------------------------------------------
 do_spoof_test() {
+  banner
   local mode
-  mode=$(whiptail --title "Spoof-Tester" --menu \
-     "Find a whitelisted range that actually crosses the gateway.\nRun LISTEN on the EXIT server first, then SEND on the RELAY server." \
-     "$WT_H" "$WT_W" 4 \
-     "listen" "This is EXIT: receive & log probes" \
-     "send"   "This is RELAY: send spoofed probes" \
-     3>&1 1>&2 2>&3) || return
+  mode=$(choose "Spoof-Tester — پیدا کردن رنج سفیدشده (اول روی EXIT گزینه listen، بعد روی RELAY گزینه send):" \
+     "listen" "این سرور EXIT است: دریافت و لاگ probeها" \
+     "send"   "این سرور RELAY است: ارسال probeهای اسپوف‌شده") || return
 
   if [[ "$mode" == "listen" ]]; then
-    local secs; secs=$(input "Listen duration (seconds):" "30") || return
-    msg "Listening for probes for ${secs}s.\nRun SEND on the relay now.\nResults will be shown after."
-    local out; out=$("$BIN" probe-listen --carrier "$CARRIER" --iface "$PUB_IFACE" \
-                       --cport "$CARRIER_PORT" --seconds "$secs" 2>/dev/null || true)
-    [[ -z "$out" ]] && out="(no probes received — that range/carrier likely does NOT pass)"
-    whiptail --title "Spoof-Tester Results" --scrolltext --msgbox "$out" "$WT_H" "$WT_W"
+    local secs; secs=$(input "مدت شنود (ثانیه):" "30")
+    echo; echo -e "${C_YEL}در حال شنود به مدت ${secs}s ... حالا روی سرور رله گزینه send را بزن.${C_RESET}"; hr
+    "$BIN" probe-listen --carrier "$CARRIER" --iface "$PUB_IFACE" \
+           --cport "$CARRIER_PORT" --seconds "$secs" 2>/dev/null || true
+    echo; echo -e "${C_DIM}(اگر هیچ خطی بالا نیامد، آن رنج/حامل احتمالاً از گیت‌وی رد نمی‌شود.)${C_RESET}"
+    pause
   else
-    local base cand secs
-    base=$(input "Candidate whitelisted range base to test\n(e.g. 2.144.0. — a trailing octet will be appended):" "") || return
-    secs=$(input "Probes per candidate:" "20") || return
-    local list; list=$(input "Trailing octets to try (space separated):" "1 10 50 100 200") || return
-    ( for o in $list; do
-        cand="${base}${o}"
-        "$BIN" probe-send --carrier "$CARRIER" --peer "$PEER_PUBLIC_IP" \
-               --spoof "$cand" --cport "$CARRIER_PORT" --count "$secs" 2>/dev/null || true
-      done ) &
-    local pid=$!
-    { for i in $(seq 1 20); do echo $((i*5)); sleep 0.3; done; wait $pid; echo 100; } \
-        | whiptail --title "Sending probes" --gauge "Sending spoofed probes to exit..." 8 "$WT_W" 0
-    msg "Probes sent for candidates: ${base}{${list}}.\nCheck the LISTEN results on the exit server to see which arrived, then set that source via menu 5."
+    local base secs list cand o
+    base=$(input "پایه‌ی رنج کاندید (مثلاً 2.144.0. — اکتت آخر اضافه می‌شود):" "")
+    secs=$(input "تعداد probe برای هر کاندید:" "20")
+    list=$(input "اکتت‌های آخر برای تست (با فاصله):" "1 10 50 100 200")
+    echo; hr
+    for o in $list; do
+      cand="${base}${o}"
+      echo "» ارسال probe با source=${cand} ..."
+      "$BIN" probe-send --carrier "$CARRIER" --peer "$PEER_PUBLIC_IP" \
+             --spoof "$cand" --cport "$CARRIER_PORT" --count "$secs" 2>/dev/null || true
+    done
+    msg "probeها ارسال شد. حالا روی سرور EXIT نتیجه‌ی listen را ببین؛ هر آی‌پی که رسیده از گیت‌وی رد شده — آن را در گزینه 5 به‌عنوان Spoof source ست کن."
   fi
 }
 
@@ -241,35 +283,35 @@ do_spoof_test() {
 # 4. Carrier protocol
 # --------------------------------------------------------------------------
 do_carrier() {
+  banner
   local c
-  c=$(whiptail --title "Carrier Protocol" --menu "Which protocol passes the gateway?" \
-      "$WT_H" "$WT_W" 3 \
-      "udp"  "UDP carrier (recommended default)" \
-      "icmp" "ICMP echo carrier" \
-      3>&1 1>&2 2>&3) || return
+  c=$(choose "کدام پروتکل از گیت‌وی رد می‌شود؟" \
+      "udp"  "حامل UDP (پیش‌فرض پیشنهادی)" \
+      "icmp" "حامل ICMP echo") || return
   CARRIER="$c"
   if [[ "$CARRIER" == "udp" ]]; then
-    CARRIER_PORT=$(input "UDP carrier port:" "$CARRIER_PORT") || return
+    CARRIER_PORT=$(input "پورت حامل UDP:" "$CARRIER_PORT")
   fi
   save_config
-  msg "Carrier set to: ${CARRIER}"
+  msg "حامل تنظیم شد: ${CARRIER}"
 }
 
 # --------------------------------------------------------------------------
 # 5. Fixed IPs + WireGuard keys
 # --------------------------------------------------------------------------
 do_wg_setup() {
-  WG_LOCAL_IP=$(input "This server tunnel IP:" "$WG_LOCAL_IP") || return
-  WG_PEER_IP=$(input "Peer tunnel IP:" "$WG_PEER_IP") || return
-  SPOOF_SRC=$(input "Spoofed (whitelisted) SOURCE IP to impersonate:" "$SPOOF_SRC") || return
+  banner
+  WG_LOCAL_IP=$(input "This server tunnel IP:" "$WG_LOCAL_IP")
+  WG_PEER_IP=$(input "Peer tunnel IP:" "$WG_PEER_IP")
+  SPOOF_SRC=$(input "Spoofed (whitelisted) SOURCE IP to impersonate:" "$SPOOF_SRC")
 
   if [[ -z "$WG_PRIV" ]] || yesno "WireGuard keys exist. Regenerate them?\n(You must update the peer's config with the new public key.)"; then
     WG_PRIV="$(wg genkey)"
     WG_PUB="$(echo "$WG_PRIV" | wg pubkey)"
   fi
 
-  msg "This server WireGuard PUBLIC key:\n\n${WG_PUB}\n\nCopy it to the OTHER server (you'll paste it there as 'peer public key')."
-  PEER_WG_PUB=$(input "Paste the PEER's WireGuard PUBLIC key:" "$PEER_WG_PUB") || return
+  msg "This server WireGuard PUBLIC key:\n\n${C_GREEN}${WG_PUB}${C_RESET}\n\nCopy it to the OTHER server (you'll paste it there as 'peer public key')."
+  PEER_WG_PUB=$(input "Paste the PEER's WireGuard PUBLIC key:" "$PEER_WG_PUB")
 
   save_config
   write_wg_conf
@@ -304,26 +346,25 @@ EOF
 # 6. Port forwarding (Xray inputs) — exit side NAT / relay side dnat
 # --------------------------------------------------------------------------
 do_forward() {
+  banner
   local act
-  act=$(whiptail --title "Port Forwarding" --menu "Manage Xray input forwards:" \
-     "$WT_H" "$WT_W" 4 \
-     "add"    "Add a forward (proto:port)" \
-     "list"   "List current forwards" \
-     "del"    "Remove a forward" \
-     "apply"  "(Re)apply all iptables rules now" \
-     3>&1 1>&2 2>&3) || return
+  act=$(choose "مدیریت فوروارد ورودی‌های Xray:" \
+     "add"    "افزودن فوروارد (proto:port)" \
+     "list"   "نمایش فورواردهای فعلی" \
+     "del"    "حذف یک فوروارد" \
+     "apply"  "اعمال مجدد قوانین iptables") || return
   case "$act" in
     add)
-      local p; p=$(input "Enter forward as proto:port (e.g. tcp:443):" "tcp:443") || return
+      local p; p=$(input "فوروارد به شکل proto:port (مثلاً tcp:443):" "tcp:443")
       FWD_PORTS="${FWD_PORTS} ${p}"; FWD_PORTS="$(echo "$FWD_PORTS" | xargs)"
-      save_config; apply_forwards; msg "Added ${p}." ;;
+      save_config; apply_forwards; msg "افزوده شد: ${p}." ;;
     list)
-      msg "Current forwards:\n${FWD_PORTS:-<none>}" ;;
+      msg "فورواردهای فعلی:\n${FWD_PORTS:-<هیچ>}" ;;
     del)
-      local p; p=$(input "Remove which forward (proto:port)?:" "") || return
+      local p; p=$(input "کدام فوروارد حذف شود (proto:port)?:" "")
       FWD_PORTS="$(echo "$FWD_PORTS" | tr ' ' '\n' | grep -vx "$p" | xargs || true)"
-      save_config; msg "Removed ${p}. Re-apply rules via 'apply'." ;;
-    apply) apply_forwards; msg "Rules applied." ;;
+      save_config; msg "حذف شد: ${p}. برای اعمال، گزینه apply را بزن." ;;
+    apply) apply_forwards; msg "قوانین اعمال شد." ;;
   esac
 }
 
@@ -365,6 +406,7 @@ apply_carrier_firewall() {
 # 7. Live status
 # --------------------------------------------------------------------------
 do_status() {
+  banner
   local s_tun s_wg s_wd ping_line wg_dump
   s_tun=$(systemctl is-active "$SVC_TUN" 2>/dev/null || echo inactive)
   s_wd=$(systemctl is-active "$SVC_WATCH" 2>/dev/null || echo inactive)
@@ -377,43 +419,47 @@ do_status() {
     ping_line="internal ping to ${WG_PEER_IP}: FAILED (tunnel down?)"
   fi
 
-  whiptail --title "Live Status" --scrolltext --msgbox \
-"Role:          ${ROLE:-?}
-Carrier:       ${CARRIER}  (port ${CARRIER_PORT})
-Peer public:   ${PEER_PUBLIC_IP:-?}
-Spoof source:  ${SPOOF_SRC:-?}
-Tunnel IPs:    ${WG_LOCAL_IP} <-> ${WG_PEER_IP}
+  local col_ok="${C_GREEN}"; local col_bad="${C_RED}"
+  local c_tun c_wd
+  [[ "$s_tun" == "active" ]] && c_tun="$col_ok" || c_tun="$col_bad"
+  [[ "$s_wd"  == "active" ]] && c_wd="$col_ok"  || c_wd="$col_bad"
 
-spooftun:      ${s_tun}
-watchdog:      ${s_wd}
-wireguard:     ${s_wg}
-
-Transfer:
-${wg_dump}
-
-Internal ping (${WG_PEER_IP}):
-${ping_line}" "$WT_H" "$WT_W"
+  printf "${C_B}۷) وضعیت لحظه‌ای${C_RESET}\n"; hr
+  printf "  Role:          %s\n" "${ROLE:-?}"
+  printf "  Carrier:       %s  (port %s)\n" "$CARRIER" "$CARRIER_PORT"
+  printf "  Peer public:   %s\n" "${PEER_PUBLIC_IP:-?}"
+  printf "  Spoof source:  %s\n" "${SPOOF_SRC:-?}"
+  printf "  Tunnel IPs:    %s <-> %s\n" "$WG_LOCAL_IP" "$WG_PEER_IP"
+  hr
+  printf "  spooftun:      ${c_tun}%s${C_RESET}\n" "$s_tun"
+  printf "  watchdog:      ${c_wd}%s${C_RESET}\n" "$s_wd"
+  printf "  wireguard:     %s\n" "$s_wg"
+  hr
+  printf "  Transfer:\n%s\n" "$wg_dump"
+  hr
+  printf "  Internal ping (%s):\n%s\n" "$WG_PEER_IP" "$ping_line"
+  pause
 }
 
 # --------------------------------------------------------------------------
 # 8. Monitoring + watchdog
 # --------------------------------------------------------------------------
 do_watchdog() {
+  banner
   local act
-  act=$(whiptail --title "Monitoring & Watchdog" --menu "Watchdog auto-restarts the tunnel on failure:" \
-     "$WT_H" "$WT_W" 4 \
-     "install" "Install & enable services (spooftun + watchdog)" \
-     "start"   "Start services" \
-     "stop"    "Stop services" \
-     "logs"    "Show recent logs" \
-     3>&1 1>&2 2>&3) || return
+  act=$(choose "واچ‌داگ در قطعی خودکار تانل را ری‌استارت می‌کند:" \
+     "install" "نصب و فعال‌سازی سرویس‌ها (spooftun + watchdog)" \
+     "start"   "استارت سرویس‌ها" \
+     "stop"    "توقف سرویس‌ها" \
+     "logs"    "نمایش لاگ‌های اخیر") || return
   case "$act" in
-    install) install_services; msg "Services installed & enabled." ;;
-    start)   start_stack; msg "Started spooftun + wireguard + watchdog." ;;
-    stop)    stop_stack;  msg "Stopped." ;;
+    install) install_services; msg "سرویس‌ها نصب و فعال شدند." ;;
+    start)   start_stack; msg "استارت شد: spooftun + wireguard + watchdog." ;;
+    stop)    stop_stack;  msg "متوقف شد." ;;
     logs)
-      local l; l=$(journalctl -u "$SVC_TUN" -u "$SVC_WATCH" -n 40 --no-pager 2>/dev/null || echo "no logs")
-      whiptail --title "Logs" --scrolltext --msgbox "$l" "$WT_H" "$WT_W" ;;
+      banner; printf "${C_B}لاگ‌های اخیر:${C_RESET}\n"; hr
+      journalctl -u "$SVC_TUN" -u "$SVC_WATCH" -n 40 --no-pager 2>/dev/null || echo "no logs"
+      pause ;;
   esac
 }
 
@@ -502,36 +548,37 @@ stop_stack() {
 # 9. Network optimization
 # --------------------------------------------------------------------------
 do_optimize() {
+  banner
   apply_sysctl
   local cc qd rp
   cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "?")
   qd=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "?")
   rp=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null || echo "?")
-  MTU=$(input "WireGuard MTU (1280 avoids fragmentation):" "$MTU") || true
+  MTU=$(input "WireGuard MTU (1280 avoids fragmentation):" "$MTU")
   save_config
   [[ -f "$WG_CONF" ]] && write_wg_conf
-  msg "Applied network optimizations:\n\ncongestion control: ${cc}\nqdisc: ${qd}\nrp_filter(all): ${rp}\nWireGuard MTU: ${MTU}\n\n(ip_forward=1, rp_filter=0 set)"
+  msg "بهینه‌سازی شبکه اعمال شد:\n\ncongestion control: ${cc}\nqdisc: ${qd}\nrp_filter(all): ${rp}\nWireGuard MTU: ${MTU}\n\n(ip_forward=1, rp_filter=0 ست شد)"
 }
 
 # --------------------------------------------------------------------------
 # 10. Backup / restore
 # --------------------------------------------------------------------------
 do_backup() {
+  banner
   local act
-  act=$(whiptail --title "Backup / Restore" --menu "Config backup:" "$WT_H" "$WT_W" 3 \
-     "backup"  "Create a backup archive" \
-     "restore" "Restore from a backup archive" \
-     3>&1 1>&2 2>&3) || return
+  act=$(choose "بکاپ/ری‌استور کانفیگ:" \
+     "backup"  "ساخت فایل بکاپ" \
+     "restore" "بازگردانی از فایل بکاپ") || return
   mkdir -p "$BACKUP_DIR"
   if [[ "$act" == "backup" ]]; then
     local ts f; ts=$(date +%Y%m%d-%H%M%S); f="${BACKUP_DIR}/spoof-tunnel-${ts}.tar.gz"
     tar czf "$f" -C / "etc/spoof-tunnel/config" "etc/wireguard/${WG_IFACE}.conf" 2>/dev/null || true
-    msg "Backup created:\n${f}"
+    msg "بکاپ ساخته شد:\n${f}"
   else
     local f
-    f=$(input "Path to backup .tar.gz:" "$BACKUP_DIR/") || return
-    [[ -f "$f" ]] || { msg "File not found: $f"; return; }
-    tar xzf "$f" -C / && load_config && msg "Restored from ${f}. Restart the stack (menu 8)."
+    f=$(input "مسیر فایل بکاپ .tar.gz:" "$BACKUP_DIR/")
+    [[ -f "$f" ]] || { msg "فایل پیدا نشد: $f"; return; }
+    tar xzf "$f" -C / && load_config && msg "بازگردانی شد از ${f}. حالا استک را ری‌استارت کن (گزینه 8)."
   fi
 }
 
@@ -539,7 +586,8 @@ do_backup() {
 # 11. Uninstall / cleanup
 # --------------------------------------------------------------------------
 do_uninstall() {
-  yesno "This removes services, WireGuard config, iptables rules and the binary.\nKeep a backup first (menu 10). Continue?" || return
+  banner
+  yesno "این کار سرویس‌ها، کانفیگ WireGuard، قوانین iptables و باینری را حذف می‌کند.\nاول بکاپ بگیر (گزینه 10). ادامه؟" || return
   stop_stack
   systemctl disable "$SVC_TUN" "$SVC_WATCH" >/dev/null 2>&1 || true
   rm -f "/etc/systemd/system/${SVC_TUN}" "/etc/systemd/system/${SVC_WATCH}"
@@ -553,31 +601,33 @@ do_uninstall() {
   if yesno "Also delete config directory ${CONF_DIR} (including backups)?"; then
     rm -rf "$CONF_DIR"
   fi
-  msg "Uninstalled. (Kernel sysctl changes revert on reboot.)"
+  msg "حذف شد. (تغییرات sysctl کرنل با ریبوت برمی‌گردند.)"
 }
 
 # --------------------------------------------------------------------------
-# Main menu
+# Main menu (plain-text, colored — no whiptail)
 # --------------------------------------------------------------------------
 main_menu() {
   while true; do
-    local status="[${ROLE:-no role}] carrier=${CARRIER} peer=${PEER_PUBLIC_IP:-?} spoof=${SPOOF_SRC:-?}"
+    banner
+    printf "  ${C_DIM}%s${C_RESET}\n" "[${ROLE:-no role}] carrier=${CARRIER} peer=${PEER_PUBLIC_IP:-?} spoof=${SPOOF_SRC:-?}"
+    hr
+    printf "  ${C_CYAN}1${C_RESET})  نصب و راه‌اندازی خودکار (deps، binary، sysctl)\n"
+    printf "  ${C_CYAN}2${C_RESET})  انتخاب نقش سرور (رله / اکسیت)\n"
+    printf "  ${C_CYAN}3${C_RESET})  Spoof-Tester (یافتن رنج سفیدشده)\n"
+    printf "  ${C_CYAN}4${C_RESET})  تنظیم پروتکل حامل (UDP / ICMP)\n"
+    printf "  ${C_CYAN}5${C_RESET})  تنظیم آی‌پی‌های فیکس + کلید WireGuard\n"
+    printf "  ${C_CYAN}6${C_RESET})  مدیریت فوروارد پورت (ورودی Xray)\n"
+    printf "  ${C_CYAN}7${C_RESET})  وضعیت لحظه‌ای (up/down، پینگ، پهنای‌باند)\n"
+    printf "  ${C_CYAN}8${C_RESET})  مانیتورینگ + واچ‌داگ (سرویس‌ها)\n"
+    printf "  ${C_CYAN}9${C_RESET})  بهینه‌سازی شبکه (BBR، MTU، rp_filter)\n"
+    printf "  ${C_CYAN}10${C_RESET}) بکاپ / ری‌استور کانفیگ\n"
+    printf "  ${C_CYAN}11${C_RESET}) حذف کامل و پاک‌سازی\n"
+    printf "  ${C_CYAN}0${C_RESET})  خروج\n"
+    hr
     local choice
-    choice=$(whiptail --title "Spoof-Tunnel Manager" \
-      --menu "$status\n\nSelect an action:" "$WT_H" "$WT_W" "$WT_MH" \
-      "1"  "Install & auto-setup (deps, binary, sysctl)" \
-      "2"  "Select server role (relay / exit)" \
-      "3"  "Spoof-Tester (find whitelisted range)" \
-      "4"  "Set carrier protocol (UDP / ICMP)" \
-      "5"  "Set fixed IPs + WireGuard keys" \
-      "6"  "Port forwarding (Xray inputs)" \
-      "7"  "Live status (up/down, ping, bandwidth)" \
-      "8"  "Monitoring + watchdog (services)" \
-      "9"  "Network optimization (BBR, MTU, rp_filter)" \
-      "10" "Backup / restore config" \
-      "11" "Uninstall & cleanup" \
-      "0"  "Exit" \
-      3>&1 1>&2 2>&3) || exit 0
+    printf "${C_GREEN}شماره گزینه: ${C_RESET}"
+    read -r choice || { echo; exit 0; }
 
     case "$choice" in
       1)  do_install ;;
@@ -591,13 +641,14 @@ main_menu() {
       9)  do_optimize ;;
       10) do_backup ;;
       11) do_uninstall ;;
-      0)  clear; exit 0 ;;
+      0)  clear 2>/dev/null || true; exit 0 ;;
+      "") : ;;
+      *)  printf "${C_RED}گزینه نامعتبر: %s${C_RESET}\n" "$choice"; sleep 1 ;;
     esac
   done
 }
 
 # --------------------------------------------------------------------------
 need_root
-command -v whiptail >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq whiptail; }
 load_config
 main_menu
