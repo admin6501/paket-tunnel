@@ -21,6 +21,9 @@ SVC_TUN="spooftun.service"
 SVC_WATCH="spoof-watchdog.service"
 WATCHDOG_SCRIPT="/usr/local/bin/spoof-watchdog.sh"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Candidate locations for repo assets (bin/, core/) when the CLI is installed
+# to /usr/local/bin and the source tree lives elsewhere.
+ASSET_DIRS=("$REPO_DIR" "/opt/paket-tunnel" "/opt/spoof-tunnel")
 
 # whiptail sizing
 WT_H=20; WT_W=76; WT_MH=12
@@ -118,20 +121,40 @@ do_install() {
 }
 
 install_binary() {
-  local arch bin_src
+  # already installed? nothing to do.
+  if [[ -x "$BIN" ]]; then return 0; fi
+
+  local arch bin_name asset_dir bin_src=""
   arch="$(uname -m)"
   case "$arch" in
-    x86_64)  bin_src="${REPO_DIR}/bin/spooftun-amd64" ;;
-    aarch64) bin_src="${REPO_DIR}/bin/spooftun-arm64" ;;
-    *)       bin_src="" ;;
+    x86_64)  bin_name="spooftun-amd64" ;;
+    aarch64) bin_name="spooftun-arm64" ;;
+    *)       bin_name="" ;;
   esac
-  if [[ -n "$bin_src" && -f "$bin_src" ]]; then
-    install -m 0755 "$bin_src" "$BIN"
-  elif [[ -f "${REPO_DIR}/core/spooftun.c" ]]; then
-    ( cd "${REPO_DIR}/core" && make native >/dev/null 2>&1 && install -m 0755 ./spooftun "$BIN" )
-  else
-    die "No prebuilt binary for ${arch} and no source to compile."
+
+  # look for a prebuilt binary across candidate asset dirs
+  if [[ -n "$bin_name" ]]; then
+    for asset_dir in "${ASSET_DIRS[@]}"; do
+      if [[ -f "${asset_dir}/bin/${bin_name}" ]]; then
+        bin_src="${asset_dir}/bin/${bin_name}"; break
+      fi
+    done
   fi
+
+  if [[ -n "$bin_src" ]]; then
+    install -m 0755 "$bin_src" "$BIN"
+    return 0
+  fi
+
+  # fall back to compiling from source if we can find it
+  for asset_dir in "${ASSET_DIRS[@]}"; do
+    if [[ -f "${asset_dir}/core/spooftun.c" ]]; then
+      ( cd "${asset_dir}/core" && make native >/dev/null 2>&1 && install -m 0755 ./spooftun "$BIN" )
+      return 0
+    fi
+  done
+
+  die "No prebuilt binary for ${arch} and no source to compile (searched: ${ASSET_DIRS[*]})."
 }
 
 apply_sysctl() {

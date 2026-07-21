@@ -49,13 +49,29 @@ peer spooftun ──(AF_PACKET RX + decapsulate)──▶ 127.0.0.1:WG_PORT (pee
 
 ## Quick start
 
-On **each** server (foreign first, then Iran):
+### روش ۱ — نصب آنلاین (تک‌خطی از گیت‌هاب)
+روی **هر دو سرور** (اول خارج، بعد ایران) کافیست بزنی:
 
 ```bash
-sudo ./install.sh        # installs deps, core binary, and the manager
-# or later, just:
+curl -fsSL https://raw.githubusercontent.com/admin6501/paket-tunnel/main/install.sh | sudo bash
+```
+
+اسکریپت خودش ریپو را در `/opt/paket-tunnel` کلون می‌کند، وابستگی‌ها و باینری
+مناسب معماری را نصب می‌کند. سپس منو را با این دستور باز کن:
+
+```bash
 sudo spoof-tunnel
 ```
+
+### روش ۲ — نصب آفلاین (از فایل‌های کلون‌شده)
+```bash
+git clone https://github.com/admin6501/paket-tunnel.git
+cd paket-tunnel
+sudo ./install.sh
+```
+
+> اجبار حالت: `sudo ./install.sh --online` یا `--offline`.
+> ریپو/برنچ دلخواه: `REPO_URL=... REPO_BRANCH=... sudo bash install.sh`.
 
 Then in the menu:
 
