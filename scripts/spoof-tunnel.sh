@@ -6,7 +6,11 @@
 # Requires: root, whiptail, wireguard-tools, iproute2, iptables.
 # Target OS: Ubuntu 22.04.
 #
-set -euo pipefail
+# NOTE: This is an interactive whiptail menu. We deliberately do NOT use
+# 'set -e'/'set -u' here: many commands legitimately return non-zero (whiptail
+# Cancel/ESC, ping failures, 'iptables -C' existence checks, '[[ ]] &&' guards),
+# and errexit would make the whole menu exit silently. We keep pipefail only.
+set -o pipefail
 
 # --------------------------------------------------------------------------
 # Constants / paths
@@ -64,8 +68,13 @@ detect_pub_iface() {
 }
 
 load_config() {
-  [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" || true
-  [[ -z "${PUB_IFACE}" ]] && PUB_IFACE="$(detect_pub_iface || true)"
+  if [[ -f "$CONF_FILE" ]]; then
+    source "$CONF_FILE" || true
+  fi
+  if [[ -z "${PUB_IFACE:-}" ]]; then
+    PUB_IFACE="$(detect_pub_iface || true)"
+  fi
+  return 0
 }
 
 save_config() {
@@ -106,7 +115,8 @@ do_install() {
     echo 10; echo "# Updating apt..."
     apt-get update -qq >/dev/null 2>&1 || true
     echo 40; echo "# Installing dependencies (wireguard, iproute2, iptables, build tools)..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
+        apt-get install -y -qq --no-install-recommends \
         wireguard wireguard-tools iproute2 iptables build-essential whiptail \
         >/dev/null 2>&1 || true
     echo 70; echo "# Installing spooftun binary..."

@@ -36,7 +36,7 @@ run_block() {
       echo "   sudo apt-get install -y ${MISSING[*]}"
       echo "Then run again:"
       echo "   curl -fsSL ${REPO_URL%.git}/raw/${REPO_BRANCH}/install.sh | sudo bash"
-      exit 1
+      return 1
     fi
 }
 

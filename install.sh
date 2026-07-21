@@ -50,7 +50,8 @@ if ! apt-get update -qq 2>/tmp/spooftun_apt.log; then
   echo "   Continuing with the working Ubuntu repositories..."
 fi
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 \
+    apt-get install -y -qq --no-install-recommends \
     git ca-certificates whiptail wireguard wireguard-tools iproute2 iptables \
     build-essential >/dev/null 2>&1 || true
 
