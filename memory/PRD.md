@@ -10,29 +10,45 @@ No web panel.
 - Core language: **pure C** (single static binary).
 - Carrier: **UDP + ICMP** both supported; Spoof-Tester picks; default UDP.
 - Delivery: **Bash + whiptail CLI** + **prebuilt binaries** (amd64 + arm64).
-- Tunnel IPs configurable from menu; defaults 10.20.20.1 (relay) / 10.20.20.2 (exit).
+- Install: online one-liner (curl | bash, clones GitHub repo) OR offline.
+- GitHub repo: https://github.com/admin6501/paket-tunnel (branch main).
+- Tunnel IPs configurable; defaults 10.20.20.1 (relay) / 10.20.20.2 (exit).
 - Target OS: Ubuntu 22.04, root on both servers.
 
 ## Architecture
-- `core/spooftun.c` — raw AF_INET (TX, IP_HDRINCL, spoofed source) + AF_PACKET
-  (RX, BPF proto filter) + 2 threads relaying WireGuard UDP <-> spoofed carrier.
-  Subcommands: `run`, `probe-send`, `probe-listen`.
-- `scripts/spoof-tunnel.sh` — whiptail manager: install, role, spoof-tester,
-  carrier, IP/WG keys, port-forward, status, watchdog, optimize, backup, uninstall.
-- systemd: `spooftun.service` + `spoof-watchdog.service` (ping-based auto-restart).
-- sysctl: ip_forward=1, rp_filter=0, BBR; WireGuard MTU 1280; iptables carrier DROP + NAT.
+- `core/spooftun.c` — raw AF_INET TX (IP_HDRINCL, spoofed source) + AF_PACKET RX
+  (BPF proto filter) + 2 threads relaying WireGuard UDP <-> spoofed carrier.
+  Subcommands: `run`, `probe-send`, `probe-listen`. Prebuilt in `bin/`.
+- `scripts/spoof-tunnel.sh` — whiptail manager (11 menu items).
+- `install.sh` — dual-mode (online GitHub clone / offline) installer.
+- systemd: `spooftun.service` + `spoof-watchdog.service`.
+- sysctl: ip_forward=1, rp_filter=0, BBR; MTU 1280; iptables carrier DROP + NAT.
 
-## Status (2026-06)
-- ✅ C core implemented; builds clean for amd64 (x86_64-linux-gnu-gcc) and
-  arm64 (aarch64-linux-gnu-gcc); static; prebuilt in `bin/`.
-- ✅ whiptail manager (all 11 menu items) + install.sh + reference systemd units + README.
-- ✅ bash syntax + shellcheck (only benign SC1090) pass.
-- ⚠️ Raw-socket / spoofing / WireGuard runtime NOT testable in this k8s container
-  (no CAP_NET_RAW). Binary fails gracefully here; must be run as root on the
-  user's Ubuntu servers for real network validation.
+## Implemented / fixed (dates)
+- 2026-06: Core C implemented; builds clean amd64 + arm64 (static). Manager +
+  installer + systemd units + README. Verified: build, syntax, ELF arch, --help.
+- 2026-07: install.sh made resilient to broken third-party apt repos
+  (ookla/speedtest-cli) — tolerates apt-get update failure, verifies required
+  tools, prints actionable remediation. (iteration_1, 7/7 pass)
+- 2026-07: install.sh dual-mode online/offline (GitHub clone to /opt/paket-tunnel).
+- 2026-07: FIXED silent-exit bug — manager returned to shell with no menu after
+  option 1. Cause: `set -euo pipefail` + load_config() returning non-zero once a
+  config existed (PUB_IFACE set). Fix: dropped -e/-u (kept pipefail) on the
+  interactive TUI; load_config() rewritten with if-blocks + `return 0`. Also added
+  NEEDRESTART_MODE=l to apt to stop SSH disconnects mid-install. (iteration_2, 10/10 pass)
+
+## Known environment limitation
+- Dev container is aarch64 without CAP_NET_RAW: raw-socket / spoofing / WireGuard
+  cannot be exercised here (expected). Real network validation happens on the
+  user's Ubuntu servers. Only build/syntax/logic verified in-container.
 
 ## Backlog / next
 - P1: auto-rotate across multiple whitelisted ranges on block.
-- P1: automated spoof-tester coordination (relay↔exit handshake to auto-pick range).
-- P2: second backup tunnel + failover; Telegram outage alerts.
+- P1: automated spoof-tester relay↔exit handshake to auto-pick best range.
+- P2: second backup tunnel + failover; Telegram outage alerts in the watchdog.
 - P2: per-carrier obfuscation randomization (ports, ICMP id jitter).
+
+## Regression tests
+- /app/tests/test_load_config_fix.sh — silent-exit fix.
+- /app/tests/test_install_deps.sh — broken apt repo happy path.
+- /app/tests/test_install_deps_missing.sh — broken apt repo ERROR path.
