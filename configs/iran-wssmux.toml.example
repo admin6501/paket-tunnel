@@ -1,0 +1,36 @@
+# Iran side — server role, wssmux behind a CDN.
+#
+# Copy to /etc/backpack/main.toml, fill in the token, then:
+#   systemctl restart backpack-main
+#
+# `bind_addr` is what marks this config as the server role. Users connect to
+# the ports listed below; the kharej client dials in to bind_addr.
+
+[server]
+bind_addr = "0.0.0.0:443"
+transport = "wssmux"
+token = "REPLACE_WITH_A_64_CHAR_TOKEN"
+
+# Ports exposed to end users. Three accepted forms:
+#   "443"                    listen on 443, forward to 443 on the other side
+#   "443=127.0.0.1:8080"     listen on 443, forward to that address
+#   "8000-8100"              a whole range
+ports = ["443", "8443"]
+
+# A Let's Encrypt certificate instead of the generated self-signed one. The
+# domain must already resolve here. Leave both empty to keep self-signed —
+# which is fine for a raw transport, but a CDN in front will want a real one.
+acme_domain = ""
+acme_email = ""
+
+# Keepalive and heartbeat are deliberately generous. This path stalls for a
+# few seconds at a time as a matter of course; a tight timeout reads those
+# stalls as a dead peer and tears down a tunnel that was about to recover.
+keepalive_period = 75
+heartbeat = 40
+
+channel_size = 2048
+nodelay = true
+accept_udp = false
+log_level = "info"
+preset = "balanced"

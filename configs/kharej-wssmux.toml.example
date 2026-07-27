@@ -1,0 +1,41 @@
+# Foreign side — client role, wssmux through a CDN edge. The main route.
+#
+# Copy to /etc/backpack/main.toml, fill in the address and token, then:
+#   systemctl restart backpack-main
+#
+# `remote_addr` is what marks this config as the client role. This side always
+# dials; nothing ever leaves Iran towards this machine's address, which is how
+# a filtered exit IP stops mattering.
+
+[client]
+remote_addr = "IRAN_SERVER_IP:443"
+transport = "wssmux"
+token = "REPLACE_WITH_THE_TOKEN_FROM_THE_IRAN_SIDE"
+
+# Spare addresses for the SAME server — a second IP, another port, or a CDN
+# edge. Pointing these at a different machine does not work: the token and the
+# exposed ports belong to one server.
+#
+# Keep at least one address here that has never been used. An address only
+# stays clean while nothing has drawn attention to it.
+fallback_addrs = ["IRAN_SERVER_SECOND_IP:8443", "edge.example.com:443"]
+
+# false: the spares sit idle until the live address stops answering.
+# true:  every address carries traffic at once, so one throttled route slows
+#        only its own share instead of the whole tunnel. The control channel
+#        still pins to a single address, since that is what identifies the peer.
+load_balance = false
+
+# Connect to a CDN edge rather than the origin, so the Iran server's own
+# address is never dialled directly and stays off blocklists. Only wss/wssmux
+# on a CDN-proxied port (443, 8443, 2053, …) can pass through an edge.
+edge_ip = ""
+
+connection_pool = 8
+aggressive_pool = true
+retry_interval = 3
+dial_timeout = 10
+keepalive_period = 75
+nodelay = true
+log_level = "info"
+preset = "balanced"

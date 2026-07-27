@@ -1,0 +1,33 @@
+# Foreign side — client role, stealth on a reserve IP. The backup route.
+#
+# Use this when the main route is up but dying: connections establish and then
+# reset or crawl. That is DPI matching the *shape* of the traffic, not the
+# address, and it is what stealth exists for.
+#
+# On the wire this is a TCP tunnel wrapped in a Noise layer: no TLS
+# fingerprint, no recognisable handshake, indistinguishable from random bytes,
+# so inspection has nothing to match on. The pre-shared key is derived from the
+# token, and the token itself never crosses the wire.
+#
+# The Iran side must be switched to transport = "stealth" as well — both ends
+# have to agree.
+
+[client]
+remote_addr = "IRAN_RESERVE_IP:443"
+transport = "stealth"
+token = "REPLACE_WITH_THE_TOKEN_FROM_THE_IRAN_SIDE"
+
+fallback_addrs = ["IRAN_SERVER_IP:8443"]
+load_balance = false
+
+# Port 443 is worth keeping even here. It carries no TLS, but a stream of
+# random bytes to 443 is far less interesting than the same stream to 7654.
+
+connection_pool = 6
+aggressive_pool = true
+retry_interval = 3
+dial_timeout = 10
+keepalive_period = 75
+nodelay = true
+log_level = "info"
+preset = "balanced"
