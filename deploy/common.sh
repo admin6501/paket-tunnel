@@ -45,7 +45,20 @@ install_backpack() {
     ok "backpack already installed ($("$BACKPACK_BIN" -v 2>/dev/null || echo unknown))"
     return 0
   fi
-  info "installing backpack..."
+
+  # Prefer the binary bundled in this repo. Reaching for the network here is
+  # backwards: the moment you need a tunnel up is the moment GitHub is least
+  # likely to answer.
+  local repo_root bundled
+  repo_root="$(dirname "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")"
+  bundled="$repo_root/bin/install-backpack.sh"
+  if [[ -x "$bundled" ]]; then
+    info "installing backpack from the bundled binary..."
+    "$bundled" --dest "$BACKPACK_BIN" && { ok "backpack installed (offline)"; return 0; }
+    warn "the bundled binary did not install — falling back to the network"
+  fi
+
+  info "installing backpack from upstream..."
   command -v curl >/dev/null 2>&1 || die "curl is required to fetch the installer"
   bash <(curl -fsSL "$BACKPACK_INSTALLER") \
     || die "backpack install failed — install it manually and re-run"
