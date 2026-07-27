@@ -117,12 +117,12 @@ $(printf '%s' "$C_GRN")Iran server is up.$(printf '%s' "$C_OFF")
 Keep that token — the kharej side needs it and it is not recoverable from
 anywhere but $BACKPACK_CONF_DIR/$NAME.toml.
 
-Next, on the foreign server:
+Next, on the foreign server: run \`sudo paket-tunnel\`, pick option 2, and give
+it these when it asks —
 
-  sudo ./deploy/kharej-client.sh \\
-    --server $PUBIP:$BINDPORT \\
-    --token $TOKEN \\
-    --transport $TRANSPORT
+  آدرس سرور ایران   $PUBIP:$BINDPORT
+  توکن              $TOKEN
+  ترنسپورت          $TRANSPORT
 
 Status:  systemctl status backpack-$NAME
 Logs:    journalctl -u backpack-$NAME -f

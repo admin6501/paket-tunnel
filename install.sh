@@ -123,12 +123,12 @@ if [[ "$SRC" != "$INSTALL_DIR" ]]; then
 fi
 
 chmod +x "$SRC"/deploy/*.sh "$SRC"/watchdog/*.sh "$SRC"/control-channel/*.sh \
-         "$SRC"/bin/*.sh "$SRC"/install.sh 2>/dev/null || true
+         "$SRC"/menu/*.sh "$SRC"/bin/*.sh "$SRC"/install.sh 2>/dev/null || true
 
 # --- backpack ------------------------------------------------------------
 
 info "installing the backpack binary"
-"$SRC/bin/install-backpack.sh" || die "backpack install failed"
+PAKET_NO_HINT=1 "$SRC/bin/install-backpack.sh" || die "backpack install failed"
 
 # --- the paket-tunnel command --------------------------------------------
 
@@ -144,6 +144,10 @@ usage() {
   cat <<'USAGE'
 paket-tunnel — set up and maintain the Iran <-> foreign tunnel
 
+Run with no arguments for the interactive menu. The subcommands below are the
+same thing without the prompts, for scripting.
+
+  paket-tunnel menu              the interactive manager
   paket-tunnel iran     [args]   set up the Iran side   (server role)
   paket-tunnel kharej   [args]   set up the foreign side (client role)
   paket-tunnel watchdog [args]   install the route health watchdog
@@ -161,6 +165,7 @@ USAGE
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
+  ""|menu)  exec bash "$ROOT/menu/paket-menu.sh" ;;
   iran)     exec "$ROOT/deploy/iran-server.sh" "$@" ;;
   kharej)   exec "$ROOT/deploy/kharej-client.sh" "$@" ;;
   watchdog) exec "$ROOT/watchdog/install.sh" "$@" ;;
@@ -181,7 +186,7 @@ case "$cmd" in
     echo "--- configs ---"
     ls -1 /etc/backpack/*.toml 2>/dev/null || echo "none yet"
     ;;
-  ""|-h|--help) usage ;;
+  -h|--help) usage ;;
   *) echo "unknown command: $cmd" >&2; echo >&2; usage >&2; exit 2 ;;
 esac
 EOF
@@ -198,17 +203,11 @@ $C_GRN paket-tunnel is installed.$C_OFF
   backpack  $(/usr/local/bin/backpack -v 2>/dev/null || echo '?')
   command   paket-tunnel
 
+Open the menu and pick from there:
+
+  $C_GRN paket-tunnel$C_OFF
+
 $C_YLW Set up the Iran server FIRST$C_OFF — the foreign side needs the token it prints.
-
-  On the Iran server:
-    paket-tunnel iran --ports "443=127.0.0.1:8080"
-
-  Then on the foreign server:
-    paket-tunnel kharej --server <iran-ip>:443 --token <token>
-    paket-tunnel watchdog
-
-  And before you need it, not after:
-    paket-tunnel control server --domain t.example.com --forward 127.0.0.1:22
 
 Read first:  $INSTALL_DIR/docs/architecture.md
 When it breaks:  $INSTALL_DIR/docs/blackout-playbook.md

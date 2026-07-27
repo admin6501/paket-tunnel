@@ -53,6 +53,11 @@ install -m 0755 "$SRC" "$DEST"
 mkdir -p /etc/backpack
 
 echo "installed $ARCH build -> $DEST  ($("$DEST" -v 2>/dev/null || echo '?'))"
-echo
-echo "Next: set up a role with the deploy scripts, e.g."
-echo "  sudo ./deploy/iran-server.sh --ports 443"
+
+# install.sh calls this mid-run and prints its own next step afterwards; two
+# different "do this next" lines in one run is just noise.
+if [[ -z "${PAKET_NO_HINT:-}" ]]; then
+  echo
+  echo "Next: open the manager and pick a role from the menu:"
+  echo "  sudo paket-tunnel"
+fi
