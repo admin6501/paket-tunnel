@@ -21,9 +21,19 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/admin6501/paket-tunnel.git}"
-REPO_BRANCH="${REPO_BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/paket-tunnel}"
 DEST_CLI="/usr/local/bin/paket-tunnel"
+
+# An update must stay on the branch that was installed. Defaulting to main and
+# checking it out would silently move a server onto a different branch — which
+# is a downgrade, not an update, if that is not where it was installed from.
+# So remember whether the branch was actually asked for.
+if [[ -n "${REPO_BRANCH:-}" ]]; then
+  REPO_BRANCH_EXPLICIT=1
+else
+  REPO_BRANCH_EXPLICIT=0
+  REPO_BRANCH=main
+fi
 
 C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_YLW=$'\033[0;33m'
 C_BLU=$'\033[0;34m'; C_OFF=$'\033[0m'
@@ -80,11 +90,21 @@ if [[ -z "$SRC" ]]; then
 
   if command -v git >/dev/null 2>&1; then
     if [[ -d "$INSTALL_DIR/.git" ]]; then
-      info "updating the existing clone at $INSTALL_DIR"
+      if [[ $REPO_BRANCH_EXPLICIT -eq 0 ]]; then
+        CURRENT_BRANCH="$(git -C "$INSTALL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+        if [[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != HEAD ]]; then
+          REPO_BRANCH="$CURRENT_BRANCH"
+        fi
+      fi
+      info "updating the existing clone at $INSTALL_DIR (branch $REPO_BRANCH)"
       if ! git -C "$INSTALL_DIR" fetch --depth 1 origin "$REPO_BRANCH"; then
         die "could not fetch $REPO_BRANCH — check the network, or remove $INSTALL_DIR and re-run"
       fi
-      if ! git -C "$INSTALL_DIR" checkout -q -B "$REPO_BRANCH" "origin/$REPO_BRANCH"; then
+      # FETCH_HEAD, not origin/<branch>: a clone made with --branch --depth 1
+      # carries a refspec for that one branch only, so fetching any other
+      # branch never creates its remote-tracking ref. FETCH_HEAD is always
+      # what was just fetched, whatever the refspec says.
+      if ! git -C "$INSTALL_DIR" checkout -q -B "$REPO_BRANCH" FETCH_HEAD; then
         die "could not check out $REPO_BRANCH — remove $INSTALL_DIR and re-run"
       fi
     else
@@ -164,12 +184,23 @@ USAGE
 }
 
 cmd="${1:-}"; shift || true
+
+# A stale install — one from before a file existed — should say so, not hand
+# back a bare "No such file or directory" from bash.
+need() {
+  [[ -f "$1" ]] && return 0
+  echo "missing: $1" >&2
+  echo "This install predates that file. Update it with:" >&2
+  echo "  paket-tunnel update" >&2
+  exit 1
+}
+
 case "$cmd" in
-  ""|menu)  exec bash "$ROOT/menu/paket-menu.sh" ;;
-  iran)     exec "$ROOT/deploy/iran-server.sh" "$@" ;;
-  kharej)   exec "$ROOT/deploy/kharej-client.sh" "$@" ;;
-  watchdog) exec "$ROOT/watchdog/install.sh" "$@" ;;
-  control)  exec "$ROOT/control-channel/setup-dnstt.sh" "$@" ;;
+  ""|menu)  need "$ROOT/menu/paket-menu.sh"; exec bash "$ROOT/menu/paket-menu.sh" ;;
+  iran)     need "$ROOT/deploy/iran-server.sh";        exec "$ROOT/deploy/iran-server.sh" "$@" ;;
+  kharej)   need "$ROOT/deploy/kharej-client.sh";      exec "$ROOT/deploy/kharej-client.sh" "$@" ;;
+  watchdog) need "$ROOT/watchdog/install.sh";          exec "$ROOT/watchdog/install.sh" "$@" ;;
+  control)  need "$ROOT/control-channel/setup-dnstt.sh"; exec "$ROOT/control-channel/setup-dnstt.sh" "$@" ;;
   backpack) exec /usr/local/bin/backpack "$@" ;;
   update)   exec bash "$ROOT/install.sh" --online ;;
   logs)     exec journalctl -u "backpack-${1:-main}" -f ;;
