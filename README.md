@@ -41,25 +41,37 @@
 
 جزئیات کامل: [`docs/architecture.md`](docs/architecture.md)
 
-## راه‌اندازی
+## نصب
 
-هر دو سرور Ubuntu/Debian با دسترسی root. **اول ایران، بعد خارج** (چون خارج به
-IP و توکن ایران نیاز دارد).
+روی **هر دو سرور** (Ubuntu/Debian، دسترسی root) یک خط:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/admin6501/paket-tunnel/main/install.sh)
+```
+
+ریپو را در `/opt/paket-tunnel` می‌گذارد، باینری BackPack مناسب معماری را نصب
+می‌کند (از داخل خود ریپو، با تأیید چک‌سام — بدون دانلود) و دستور `paket-tunnel`
+را اضافه می‌کند.
+
+### نصب آفلاین
+
+اگر سرور به گیت‌هاب نمی‌رسد، یک کلون که قبلاً گرفته‌ای کافی است — باینری‌ها
+داخل ریپو هستند:
 
 ```bash
 git clone https://github.com/admin6501/paket-tunnel.git
-cd paket-tunnel
-sudo ./bin/install-backpack.sh     # باینری آماده، بدون نیاز به اینترنت
+cd paket-tunnel && sudo ./install.sh --offline
 ```
 
-باینری BackPack نسخه‌ی `v1.6.1` برای amd64 و arm64 داخل `bin/` هست — استاتیک،
-بدون وابستگی. اسکریپت‌های `deploy/` هم اگر خودت نصبش نکرده باشی همین را
-برمی‌دارند. جزئیات و چک‌سام: [`bin/README.md`](bin/README.md)
+## راه‌اندازی
+
+**اول ایران، بعد خارج** — چون سمت خارج به IP و توکنی که سمت ایران چاپ می‌کند
+نیاز دارد.
 
 ### ۱) سرور ایران
 
 ```bash
-sudo ./deploy/iran-server.sh --ports "443=127.0.0.1:8080,8443" --transport wssmux
+sudo paket-tunnel iran --ports "443=127.0.0.1:8080,8443" --transport wssmux
 ```
 
 توکنی که چاپ می‌کند را نگه دار — سمت خارج به همان توکن نیاز دارد.
@@ -71,7 +83,7 @@ sudo ./deploy/iran-server.sh --ports "443=127.0.0.1:8080,8443" --transport wssmu
 ### ۲) سرور خارج
 
 ```bash
-sudo ./deploy/kharej-client.sh \
+sudo paket-tunnel kharej \
   --server 1.2.3.4:443 \
   --token <توکنی که مرحله ۱ داد> \
   --transport wssmux \
@@ -83,7 +95,7 @@ sudo ./deploy/kharej-client.sh \
 روی **سرور خارج**:
 
 ```bash
-sudo ./watchdog/install.sh
+sudo paket-tunnel watchdog
 ```
 
 هر ۶۰ ثانیه سلامت تونل را می‌سنجد و اگر مسیر فعلی مرده باشد، روی آدرس پشتیبان
@@ -93,14 +105,26 @@ sudo ./watchdog/install.sh
 
 ```bash
 # روی سرور خارج
-sudo ./control-channel/setup-dnstt.sh server --domain t.example.com --forward 127.0.0.1:22
+sudo paket-tunnel control server --domain t.example.com --forward 127.0.0.1:22
 # روی سرور ایران
-sudo ./control-channel/setup-dnstt.sh client --domain t.example.com --pubkey <کلیدی که سمت خارج داد>
+sudo paket-tunnel control client --domain t.example.com --pubkey <کلیدی که سمت خارج داد>
 ```
 
 این یک تونل DNS است: کند، ولی وقتی همه‌چیز خوابیده باشد معمولاً هنوز کار می‌کند،
-و همین برای رسیدن به سرور ایران و درست‌کردنش کافی است. راهنما:
+و همین برای رسیدن به سرور خارج و درست‌کردنش کافی است. راهنما:
 [`control-channel/README.md`](control-channel/README.md)
+
+## دستورات
+
+```
+paket-tunnel iran|kharej    راه‌اندازی هر نقش
+paket-tunnel watchdog       نصب نگهبان مسیر
+paket-tunnel control        کانال کنترلی DNS
+paket-tunnel status         چه چیزی بالاست
+paket-tunnel logs [name]    دنبال‌کردن لاگ تونل
+paket-tunnel update         به‌روزرسانی و نصب مجدد
+paket-tunnel backpack       اجرای خود BackPack (بدون آرگومان: منوی خودش)
+```
 
 ## وقتی قطعی می‌شود
 
@@ -109,6 +133,7 @@ sudo ./control-channel/setup-dnstt.sh client --domain t.example.com --pubkey <ک
 ## ساختار
 
 ```
+install.sh         نصب تک‌خطی (آنلاین و آفلاین)
 bin/               باینری آماده‌ی BackPack (amd64/arm64) + نصب آفلاین
 deploy/            اسکریپت‌های نصب و ساخت کانفیگ برای هر دو نقش
 configs/           نمونه‌کانفیگ TOML (wssmux پشت CDN، stealth، kcp)
