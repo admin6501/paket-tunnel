@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://asan-gozar.ir/sitemap.xml
