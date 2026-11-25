@@ -375,6 +375,7 @@ def main(archive):
             subprocess.run(['systemctl', 'reload', 'nginx'], check=False)
             raise
     print(f'Installed and verified over HTTPS ({bundle_id}). Store: https://{DOMAIN}/  |  Admin username: {username}')
+    print(f'Ticket management: https://{DOMAIN}/account.html?support=manage#tickets')
 
 
 if __name__ == '__main__':
