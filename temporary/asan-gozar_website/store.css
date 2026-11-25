@@ -208,6 +208,7 @@ body.light #status.error { color: #a42234; }
 #ticket-panel { margin-block: 1.2rem 0; }
 .ticket-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .8rem; }
 .ticket-toolbar h2 { margin: 0; font-size: clamp(1.14rem, 3vw, 1.6rem); overflow-wrap: anywhere; min-width: 0; }
+#app .ticket-delete { color: var(--text); border-color: #cc6868; }
 .ticket-form { display: grid; gap: .75rem; padding: 1rem; margin-block: .9rem; border: 1px solid var(--line); border-radius: .85rem; background: var(--bg); }
 .ticket-form > button { justify-self: start; }
 .ticket-filters { display: flex; align-items: end; flex-wrap: wrap; }

@@ -33,6 +33,7 @@ function messageText(value, images) {
 const error = (json, text, status = 400) => json({ error: text }, status);
 const notFound = json => error(json, 'تیکت پیدا نشد.', 404);
 const changed = json => error(json, 'تیکت تغییر کرده است. آن را دوباره باز کنید.', 409);
+const closedTicket = (json, status) => error(json, 'این تیکت پایان یافته است. فقط پشتیبانی می‌تواند آن را بازگشایی کند.', status);
 const noDepartment = json => error(json, 'دپارتمان انتخاب‌شده در دسترس نیست.', 409);
 const missingImages = json => error(json, 'یکی از پیوست‌ها منقضی شده یا از سقف حجم بیشتر است. پیوست‌ها را دوباره انتخاب کنید.', 409);
 
@@ -171,15 +172,16 @@ async function replyToTicket(env, session, ticket, staff, body, json) {
   const note = staff && body?.internal === true;
   if (message === null || (!staff && body?.internal)) return error(json, 'متن پیام معتبر نیست.');
   if (body.version !== ticket.version) return changed(json);
+  if (!staff && finished.has(ticket.status)) return closedTicket(json, 409);
   const attachments = await attachmentSelection(env, session, body.images);
   if (!attachments) return error(json, 'پیوست‌ها معتبر نیستند.');
   const db = env.DB, now = Date.now();
   const kind = note ? 'note' : staff ? 'staff' : 'customer';
-  const next = note ? ticket.status : staff ? 'waiting_customer' : 'open';
+  const next = note || finished.has(ticket.status) ? ticket.status : staff ? 'waiting_customer' : 'open';
   const statements = [
     db.prepare(`INSERT INTO store_ticket_messages(ticket_id,actor_id,kind,body,created_at)
       SELECT id,?,?,?,? FROM store_tickets WHERE id=? AND version=? AND (? OR status NOT IN ('resolved','closed')) ${attachments.guard}`)
-      .bind(uid, kind, message, now, ticket.id, ticket.version, Number(note), ...attachments.args),
+      .bind(uid, kind, message, now, ticket.id, ticket.version, Number(staff), ...attachments.args),
     ...attachments.link,
     db.prepare('UPDATE store_tickets SET status=?,updated_at=?,version=version+1 WHERE id=? AND changes()=?')
       .bind(next, now, ticket.id, attachments.count),
@@ -202,13 +204,13 @@ async function replyToTicket(env, session, ticket, staff, body, json) {
   const [saved] = await db.batch(statements);
   if (saved.meta.changes) return json({ ok: true });
   const fresh = attachments.link.length && await first(db, 'SELECT version,status FROM store_tickets WHERE id=?', ticket.id);
-  return fresh && fresh.version === ticket.version && (note || !finished.has(fresh.status)) ? missingImages(json) : changed(json);
+  return fresh && fresh.version === ticket.version && (staff || !finished.has(fresh.status)) ? missingImages(json) : changed(json);
 }
 
 async function updateTicket(db, uid, ticket, staff, body, json) {
   if (body?.version !== ticket.version) return changed(json);
   const status = staff ? body.status : body.status ?? ticket.status;
-  if (!Object.hasOwn(statuses, status)) return error(json, 'وضعیت نامعتبر است.');
+  if (typeof status !== 'string' || !Object.hasOwn(statuses, status)) return error(json, 'وضعیت نامعتبر است.');
   let department = ticket.department_id, priority = ticket.priority, assignee = ticket.assignee_id;
   if (staff) {
     department = body.department; priority = body.priority; assignee = body.assignee;
@@ -216,12 +218,12 @@ async function updateTicket(db, uid, ticket, staff, body, json) {
       return error(json, 'وضعیت، دپارتمان، اولویت یا مسئول رسیدگی معتبر نیست.');
     }
   } else {
-    if (status !== ticket.status && !(status === 'closed' || (status === 'open' && finished.has(ticket.status)))) {
+    if (finished.has(ticket.status) && (status !== ticket.status || body.priority !== undefined)) return closedTicket(json, 403);
+    if (status !== ticket.status && status !== 'closed') {
       return error(json, 'این تغییر وضعیت برای کاربر مجاز نیست.', 403);
     }
     if (body.priority !== undefined) {
       if (!validPriority(body.priority)) return error(json, 'اولویت نامعتبر است.');
-      if (finished.has(ticket.status)) return error(json, 'برای تغییر اولویت، ابتدا تیکت را باز کنید.', 409);
       priority = body.priority;
     }
   }
@@ -250,6 +252,19 @@ async function updateTicket(db, uid, ticket, staff, body, json) {
       SELECT ?,?,'event',?,? WHERE changes()=1`).bind(ticket.id, uid, details.join(' · '), now),
   ]);
   return saved.meta.changes ? json({ ok: true }) : changed(json);
+}
+
+async function deleteTicket(db, ticket, body, json) {
+  if (body.version !== ticket.version) return changed(json);
+  // The original message foreign key restricts ticket deletion. Deleting the
+  // messages also removes their attachments through the attachment foreign key.
+  const [, deleted] = await db.batch([
+    db.prepare(`DELETE FROM store_ticket_messages WHERE ticket_id=?
+      AND EXISTS (SELECT 1 FROM store_tickets WHERE id=? AND version=?)`)
+      .bind(ticket.id, ticket.id, ticket.version),
+    db.prepare('DELETE FROM store_tickets WHERE id=? AND version=?').bind(ticket.id, ticket.version),
+  ]);
+  return deleted.meta.changes ? json({ ok: true }) : changed(json);
 }
 
 async function departments(db, staff, body, json) {
@@ -295,7 +310,7 @@ export async function ticketRequest(request, env, actor, route, json, readBody) 
     if (!post) return listTickets(db, url, uid, staff, json);
     if (!staff) return openTicket(env, actor.session, body, json);
   }
-  const parts = /^(\d+)(?:\/(reply|update|images\/([a-f0-9]{32})))?$/.exec(path);
+  const parts = /^(\d+)(?:\/(reply|update|delete|images\/([a-f0-9]{32})))?$/.exec(path);
   if (!parts || !positive(Number(parts[1]))) return notFound(json);
   const ticket = await first(db, `${baseTicket} WHERE t.id=? AND (? OR t.customer_id=?)`, Number(parts[1]), Number(staff), uid);
   if (!ticket) return notFound(json);
@@ -307,5 +322,6 @@ export async function ticketRequest(request, env, actor, route, json, readBody) 
   }
   if (post && parts[2] === 'reply') return replyToTicket(env, actor.session, ticket, staff, body, json);
   if (post && parts[2] === 'update') return updateTicket(db, uid, ticket, staff, body, json);
+  if (post && parts[2] === 'delete') return staff ? deleteTicket(db, ticket, body, json) : error(json, 'دسترسی ندارید.', 403);
   return notFound(json);
 }
