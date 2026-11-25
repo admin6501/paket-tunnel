@@ -778,7 +778,20 @@ async function readTrialReview(env, uid) {
   const details = JSON.parse(attempt.details ?? 'null');
   const suffix = attempt.attempt_key.split(':').at(-1);
   const saved = await first(env, 'SELECT id,user_id FROM services WHERE sub_id=?', attempt.sub_id);
-  return { claim: claim.created_at, attempt, account, details, panel, suffix, saved };
+  let anchorHasClient = false;
+  if (!account && !saved) {
+    // A grouped create can leave the first inbound committed before the account
+    // projection exists. The account list alone cannot prove absence.
+    const inbound = await panelCall(panel, 'GET', `/panel/api/inbounds/get/${encodeURIComponent(attempt.inbound_id)}`);
+    if (!inbound.success || typeof inbound.obj?.settings !== 'string') {
+      throw new Error('بررسی کلاینت‌های ورودی اولیه ممکن نشد. همان ورودی را در VPN-UI بررسی کنید.');
+    }
+    const { clients } = JSON.parse(inbound.obj.settings);
+    if (!Array.isArray(clients)) throw new Error('فهرست کلاینت‌های ورودی اولیه در دسترس نیست.');
+    const email = attempt.email.trim().toLowerCase();
+    anchorHasClient = clients.some(client => String(client?.email ?? '').trim().toLowerCase() === email);
+  }
+  return { claim: claim.created_at, attempt, account, details, panel, suffix, saved, anchorHasClient };
 }
 
 // ---------------------------------------------------------- رندر
@@ -1811,7 +1824,7 @@ async function handleAdminUICallback(c, cq, answer) {
     try { review = await readTrialReview(env, target); }
     catch (error) { return renderAdmin(`بررسی تست ممکن نشد. <code>${esc(error.message)}</code>`, adminBack(back)); }
     if (!review || (action !== 'trial' && suffix !== review.suffix)) return renderAdmin('این درخواست قبلاً تغییر کرده است.', adminBack(back));
-    const { attempt, account, details, panel, saved } = review;
+    const { attempt, account, details, panel, saved, anchorHasClient } = review;
     const members = details?.memberIds ?? [Number(attempt.inbound_id)];
     const ready = account?.subId === attempt.sub_id &&
       (details ? hasTrialMemberships(account, members) : account.memberships?.some(item => Number(item.inboundId) === members[0])) &&
@@ -1828,16 +1841,18 @@ async function handleAdminUICallback(c, cq, answer) {
       return renderAdmin(recorded ? 'سرویس موجود ثبت شد.' : 'درخواست قبلاً تغییر کرده است.', adminBack(back));
     }
     if (action === 'trial_release') {
-      if (account || saved) return renderAdmin('رکوردی برای این اشتراک پیدا شد. بررسی را از صفحهٔ کاربر ادامه دهید.', adminBack(back));
+      if (account || saved || anchorHasClient) return renderAdmin('رکوردی برای این اشتراک پیدا شد. بررسی را از صفحهٔ کاربر ادامه دهید.', adminBack(back));
       const released = await run(env, 'DELETE FROM test_claims WHERE user_id=? AND created_at=?', target, review.claim);
       return renderAdmin(released.meta.changes ? 'کاربر دوباره می‌تواند درخواست تست بدهد.' : 'درخواست قبلاً تغییر کرده است.', adminBack(back));
     }
-    const title = `درخواست تست <code>${id}</code>\nنام حساب در پنل: <code>${esc(attempt.email)}</code>`;
+    const title = `درخواست تست <code>${id}</code>\nنام حساب در پنل: <code>${esc(attempt.email)}</code>\nشناسهٔ ورودی اولیه: <code>${esc(attempt.inbound_id)}</code>`;
     const buttons = [];
     let detail;
     if (ready) {
       detail = details ? 'اشتراک و ورودی‌های مورد انتظار در پنل تأیید شدند.' : 'این تلاش قدیمی است. گروه‌های حساب را در پنل بررسی کنید و سپس سرویس موجود را ثبت کنید.';
       buttons.push([btn('ثبت سرویس موجود', `admin:trial_save:${id}:${review.suffix}`)]);
+    } else if (anchorHasClient) {
+      detail = 'حساب در ورودی اولیه وجود دارد و هنوز در فهرست کلاینت‌ها ثبت نشده است. عضویت گروهی را در پنل بررسی کنید.';
     } else if (!account && !saved) {
       detail = 'حساب در جست‌وجوی اتصال فروشگاه دیده نشد. نام بالا را با دسترسی کامل در پنل بررسی کنید. اگر حسابی وجود ندارد، اجازهٔ درخواست دوباره بدهید.';
       buttons.push([btn('تأیید نبود حساب و اجازهٔ تست دوباره', `admin:trial_release:${id}:${review.suffix}`)]);
