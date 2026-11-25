@@ -1,0 +1,15 @@
+{
+  "name": "asan-gozar-store",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

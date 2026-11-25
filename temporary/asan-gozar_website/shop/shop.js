@@ -8,6 +8,9 @@ const formats = new Set(['B','STRONG','I','EM','U','S','CODE','PRE','BR','A','BL
 const rtlDigits = '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
 let state = { signedIn: false, messages: [], revision: 0 };
 let busy = false;
+let registering = false;
+let nextMessage = null;
+let newestMessage = null;
 
 function announce(text = '', error = false) {
   status.textContent = text;
@@ -76,9 +79,11 @@ function show(newState) {
   if (!state.signedIn) {
     messages.replaceChildren();
     reply.reset();
-    get('pairing').hidden = true;
+    get('inbox').hidden = true;
     return;
   }
+  get('inbox').hidden = true;
+  messages.hidden = false;
   const fragment = document.createDocumentFragment();
   for (const message of state.messages || []) {
     const card = document.createElement('article');
@@ -87,10 +92,11 @@ function show(newState) {
     content.className = 'message-content';
     renderHTML(message.html, content);
     card.append(content);
-    if (message.photo && /^(data:image\/png;base64,[A-Za-z0-9+/=]+|\/shop\/api\/receipt\?kind=(order|topup)&id=\d+)$/.test(message.photo)) {
+    if (message.photo && ((safeURL(message.photo) && new URL(message.photo).origin === location.origin) || /^(data:image\/png;base64,[A-Za-z0-9+/=]+|\/shop\/api\/receipt\?kind=(order|topup)&id=\d+)$/.test(message.photo))) {
       const photo = document.createElement('img');
       photo.src = message.photo;
-      photo.alt = message.photo.startsWith('data:') ? 'کد QR سرویس' : 'تصویر فیش پرداخت';
+      photo.alt = message.photo.startsWith('data:') ? 'کد QR سرویس'
+        : message.photo.startsWith('/shop/api/receipt') ? 'تصویر فیش پرداخت' : 'تصویر منوی فروشگاه';
       card.append(photo);
     }
     for (const code of content.querySelectorAll('code')) {
@@ -196,26 +202,73 @@ async function imageData(file) {
   } finally { image.close(); }
 }
 
-get('pair').addEventListener('click', () => {
-  void perform(async () => {
-    const { link: url } = await api('pair', {});
-    get('login-link').href = safeURL(url) || '#';
-    get('pairing').hidden = false;
-  });
+get('toggle-signup').addEventListener('click', () => {
+  registering = !registering;
+  get('login-title').textContent = registering ? 'ساخت حساب فروشگاه' : 'ورود به فروشگاه';
+  get('signup-name').hidden = !registering;
+  get('display-name').required = registering;
+  get('auth-submit').textContent = registering ? 'ثبت‌نام' : 'ورود';
+  get('toggle-signup').textContent = registering ? 'حساب دارم' : 'ساخت حساب';
+  get('password').autocomplete = registering ? 'new-password' : 'current-password';
 });
-get('verify').addEventListener('submit', event => {
+
+get('auth').addEventListener('submit', event => {
   event.preventDefault();
   void perform(async () => {
-    await api('verify', { code: get('code').value.trim() });
-    get('verify').reset();
-    await refresh();
+    const password = get('password');
+    try {
+      await api(registering ? 'register' : 'login', {
+        name: get('display-name').value, username: get('username').value, password: password.value,
+      });
+      get('auth').reset();
+      await refresh();
+    } finally { password.value = ''; }
   });
 });
+
+async function loadInbox(more = false) {
+  const { messages: entries, next } = await api(more ? `inbox?before=${nextMessage}` : 'inbox');
+  get('inbox').hidden = false;
+  messages.hidden = true;
+  reply.hidden = true;
+  const container = get('inbox-items');
+  if (!more) {
+    newestMessage = entries[0]?.id;
+    container.replaceChildren();
+  }
+  for (const entry of entries) {
+    const card = document.createElement('article');
+    card.className = 'message';
+    const time = document.createElement('time');
+    time.dateTime = new Date(entry.created_at).toISOString();
+    time.textContent = new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }).format(entry.created_at);
+    if (!entry.read_at) time.textContent += ' · خوانده‌نشده';
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    renderHTML(entry.html, content);
+    card.append(time, content);
+    container.append(card);
+  }
+  if (!more && entries.length === 0) container.textContent = 'هنوز پیامی دریافت نکرده‌اید.';
+  nextMessage = next;
+  get('inbox-more').hidden = !nextMessage;
+  get('inbox-read').hidden = !newestMessage;
+}
+
+get('inbox-open').addEventListener('click', () => { void perform(loadInbox); });
+get('inbox-more').addEventListener('click', () => { void perform(() => loadInbox(true)); });
+get('inbox-read').addEventListener('click', () => {
+  void perform(async () => {
+    await api('inbox/read', { upTo: newestMessage });
+    await loadInbox();
+  });
+});
+
 get('home').addEventListener('click', () => {
   if (state.input === 'image' && !window.confirm('به منو برگردم؟ پیش‌نویس فعلی ممکن است لغو شود.')) return;
   void perform(() => action({ kind: 'home' }));
 });
-get('refresh').addEventListener('click', () => { void perform(refresh); });
+get('refresh').addEventListener('click', () => { void perform(get('inbox').hidden ? refresh : loadInbox); });
 get('logout').addEventListener('click', () => { void perform(async () => show(await api('logout', {}))); });
 reply.addEventListener('submit', event => {
   event.preventDefault();

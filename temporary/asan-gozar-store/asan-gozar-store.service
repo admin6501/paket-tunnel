@@ -1,0 +1,23 @@
+[Unit]
+Description=Asan Gozar standalone storefront
+After=network-online.target
+
+[Service]
+Type=simple
+User=asan-gozar-store
+Group=asan-gozar-store
+WorkingDirectory=/opt/asan-gozar-store
+ExecStart=/usr/bin/node /opt/asan-gozar-store/server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=200
+StateDirectory=asan-gozar-store
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

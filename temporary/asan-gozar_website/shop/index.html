@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="خرید، تمدید و مدیریت سرویس‌های آسان‌گذر با حساب تلگرام">
+  <meta name="description" content="خرید، تمدید و مدیریت سرویس‌های آسان‌گذر در سایت">
   <meta name="referrer" content="no-referrer">
   <title>فروشگاه آسان‌گذر</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml">
@@ -22,31 +22,46 @@
   <main>
     <div class="intro">
       <h1>فروشگاه آسان‌گذر</h1>
-      <p>خرید، تمدید و مدیریت سرویس‌ها با همان حساب و کیف پول ربات فروش.</p>
+      <p>خرید، تمدید و مدیریت سرویس‌ها و کیف پول آسان‌گذر.</p>
     </div>
     <section id="app" class="workspace" aria-label="فروشگاه" aria-busy="true">
       <p id="status" role="status"></p>
       <section id="login" hidden aria-labelledby="login-title">
-        <h2 id="login-title">ورود با تلگرام</h2>
-        <p>لینک ورود را در ربات باز کن. ربات یک کد یک‌بارمصرف می‌دهد که باید همین‌جا وارد کنی.</p>
-        <button type="button" id="pair">دریافت لینک ورود</button>
-        <div id="pairing" hidden>
-          <p><a id="login-link" target="_blank" rel="noopener noreferrer">باز کردن ربات فروش</a></p>
-          <form id="verify">
-            <label for="code">کد ورود ربات</label>
-            <div class="form-row">
-              <input id="code" dir="ltr" maxlength="16" autocomplete="one-time-code" required>
-              <button type="submit">تأیید ورود</button>
-            </div>
-          </form>
-        </div>
+        <h2 id="login-title">ورود به فروشگاه</h2>
+        <form id="auth" class="auth-form">
+          <div id="signup-name" hidden>
+            <label for="display-name">نام نمایشی</label>
+            <input id="display-name" autocomplete="nickname" maxlength="80">
+          </div>
+          <div>
+            <label for="username">نام کاربری</label>
+            <input id="username" dir="ltr" autocomplete="username" maxlength="32" required>
+          </div>
+          <div>
+            <label for="password">رمز عبور</label>
+            <input id="password" dir="ltr" type="password" autocomplete="current-password" required minlength="14">
+          </div>
+          <div class="actions">
+            <button type="submit" id="auth-submit">ورود</button>
+            <button type="button" class="secondary" id="toggle-signup">ساخت حساب</button>
+          </div>
+        </form>
       </section>
       <section id="account" hidden aria-label="حساب فروشگاه">
         <div class="actions">
           <button type="button" id="home" class="secondary">منوی فروشگاه</button>
+          <button type="button" id="inbox-open" class="secondary">صندوق پیام</button>
           <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
           <button type="button" id="logout" class="secondary logout">خروج</button>
         </div>
+        <section id="inbox" hidden aria-labelledby="inbox-title">
+          <h2 id="inbox-title">صندوق پیام سایت</h2>
+          <div id="inbox-items" aria-live="polite"></div>
+          <div class="actions">
+            <button type="button" class="secondary" id="inbox-more" hidden>پیام‌های قدیمی‌تر</button>
+            <button type="button" class="secondary" id="inbox-read" hidden>علامت‌گذاری به‌عنوان خوانده‌شده</button>
+          </div>
+        </section>
         <div id="messages" aria-live="polite"></div>
         <form id="reply" hidden>
           <label for="reply-value" id="reply-label">پاسخ</label>

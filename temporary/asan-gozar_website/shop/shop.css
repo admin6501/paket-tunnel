@@ -47,3 +47,8 @@ footer { padding-block: 1.5rem; font-size: .9rem; }
   .actions button, .button-row button { flex: 1 1 auto; }
   .logout { margin-inline-start: 0; }
 }
+.auth-form { display: grid; gap: .85rem; max-width: 28rem; }
+.auth-form input { width: 100%; border: 1px solid var(--line); border-radius: .65rem; padding: .55rem .75rem; background: var(--bg); }
+#inbox { margin-top: 1rem; }
+#inbox-items { display: grid; gap: .85rem; margin-block: 1rem; }
+#inbox-items time { display: block; color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }

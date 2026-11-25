@@ -1,0 +1,199 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openStore } from '../database.mjs';
+import { hashPassword } from '../auth.js';
+import { handleUpdate } from '../engine.js';
+import { webShopRequest } from '../shop-api.js';
+import { listenForWebShop } from '../http.mjs';
+import { deliverToInbox } from '../inbox.js';
+import { processMessageJobs } from '../messages.js';
+import { panelURL } from '../panel-config.js';
+
+const origin = 'https://store.example';
+const password = 'unique-long-test-password';
+
+async function fixture(t) {
+  const { sqlite, DB } = openStore(':memory:');
+  t.after(() => sqlite.close());
+  const hash = await hashPassword(password);
+  const owner = sqlite.prepare('INSERT INTO store_accounts(username,display_name,salt,password_hash,owner,created_at) VALUES (?,?,?,?,1,?) RETURNING id')
+    .get('owner', 'Shop Owner', hash.salt, hash.password_hash, Date.now());
+  const env = { DB, STORE_SECRET: '0'.repeat(64), WEB_SHOP_ORIGIN: origin, OWNER_IDS: String(owner.id),
+    PANEL_URL: 'https://panel.example', PANEL_USER: 'admin', PANEL_PASS: 'fixture',
+    CARD_NUMBER: '1234123412341234', CARD_HOLDER: 'Fixture' };
+  return { sqlite, env, owner };
+}
+
+function browser(env, ip) {
+  let cookie = '';
+  let state;
+  async function request(path, body, from = origin) {
+    const res = await webShopRequest(new Request(`${origin}/shop/api/${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { Origin: from, Cookie: cookie, 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }), { ...env, WEB_SHOP_IP: ip }, handleUpdate);
+    const set = res.headers.get('set-cookie');
+    if (set) {
+      assert.match(set, /^__Host-ag-session=.*Path=\/; Secure; HttpOnly; SameSite=Strict/);
+      cookie = set.split(';')[0];
+    }
+    const data = res.headers.get('content-type').startsWith('image/')
+      ? new Uint8Array(await res.arrayBuffer()) : await res.json();
+    return { status: res.status, data };
+  }
+  const buttons = () => state.messages.flatMap(message => message.rows.flat()).map(button => button.action);
+  return {
+    request,
+    get state() { return state; },
+    buttons,
+    async init() {
+      state = (await request('state')).data;
+      assert.equal(state.signedIn, true);
+      if (!state.messages.length) await this.act({kind:'home'});
+    },
+    async act(body) {
+      const result = await request('action', { ...body, revision: state.revision });
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      state = result.data;
+      assert.doesNotMatch(JSON.stringify(state), /وضعیت درخواست نامشخص است/);
+      return state;
+    },
+    async press(action) {
+      assert.ok(buttons().includes(action), action + ' ' + JSON.stringify(state));
+      return this.act({ kind:'button', action });
+    },
+  };
+}
+
+const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
+const image = Buffer.from(testJPEG).toString('base64');
+
+test('standalone signup, local admin role, session rotation and private support inbox', async t => {
+  const { sqlite, env } = await fixture(t);
+  t.mock.method(globalThis, 'fetch', async () => { throw Error('No outbound fetch expected'); });
+  const guest = browser(env,'192.0.2.10'), admin = browser(env,'192.0.2.11');
+  assert.equal((await guest.request('action', { kind:'home', revision:0 })).status, 401);
+  assert.equal((await guest.request('register', {}, 'https://untrusted.example')).status, 403);
+  assert.equal((await guest.request('register', {name:'Customer',username:'buyer',password,owner:true})).status, 200);
+  await guest.init();
+  assert.ok(guest.buttons().includes('buy'));
+  assert.ok(!guest.buttons().includes('admin:root'));
+  assert.equal(sqlite.prepare("SELECT owner FROM store_accounts WHERE username='buyer'").get().owner, 0);
+  assert.equal((await guest.request('action',{kind:'button',action:'admin:root',revision:guest.state.revision})).status, 400);
+  assert.equal((await guest.request('receipt?kind=order&id=1')).status, 403);
+  await guest.press('support');
+  await guest.act({kind:'text',text:'درخواست آزمایشی'});
+  const customerId = sqlite.prepare("SELECT id FROM store_accounts WHERE username='buyer'").get().id;
+  assert.equal((await admin.request('login',{username:'owner',password:'incorrect-strong-password'})).status, 401);
+  assert.equal((await admin.request('login',{username:'owner',password})).status, 200);
+  await admin.init();
+  await admin.press('admin:root');
+  assert.ok(admin.buttons().includes('admin:plans'));
+  assert.ok(admin.buttons().includes('admin:categories'));
+  assert.ok(!admin.buttons().some(action=>action?.includes('broadcast')));
+  assert.match(JSON.stringify((await admin.request('inbox')).data), /درخواست آزمایشی/);
+  assert.doesNotMatch(JSON.stringify((await guest.request('inbox')).data), /درخواست آزمایشی/);
+
+  await admin.press('admin:users:0');
+  await admin.press('admin:user:'+customerId);
+  await admin.press('admin:message_user:'+customerId);
+  await admin.act({kind:'text',text:'پاسخ پشتیبانی'});
+  await admin.press(admin.buttons().find(action=>action?.startsWith('admin:message_send:')));
+  await processMessageJobs(env,(id,text)=>deliverToInbox(env,'sendMessage',{chat_id:id,text}));
+  assert.match(JSON.stringify((await guest.request('inbox')).data), /پاسخ پشتیبانی/);
+
+  const replacement = browser(env,'192.0.2.12');
+  assert.equal((await replacement.request('login',{username:'buyer',password})).status,200);
+  assert.equal((await guest.request('inbox')).status,401);
+  await replacement.init();
+  sqlite.prepare('UPDATE store_profiles SET blocked=1 WHERE user_id=?').run(customerId);
+  assert.equal((await replacement.request('inbox')).status,401);
+});
+
+test('card purchase and wallet top-up are reviewed in the web admin without an external messenger', async t => {
+  const { sqlite, env } = await fixture(t);
+  sqlite.exec(`INSERT INTO plans VALUES('p10',10,70000,1);
+    INSERT INTO store_categories(id,name,group_ids) VALUES(1,'Test','1');
+    INSERT INTO store_plan_specs VALUES('p10',1,30);
+    INSERT INTO settings(key,value) VALUES('sub_base_url','https://sub.example/sub/');`);
+  let provisioned = 0;
+  const unexpected = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const target = new URL(url);
+    if (target.hostname !== 'panel.example') {
+      unexpected.push(target.hostname);
+      throw Error('Unexpected destination');
+    }
+    const p = target.pathname;
+    if (p.endsWith('/login')) return Response.json({success:true},{headers:{'set-cookie':'vpn-ui=test'}});
+    if (p.endsWith('/clients/groups')) return Response.json({success:true,obj:[{id:1,inboundIds:[3]}]});
+    if (p.endsWith('/clients/assignable')) return Response.json({success:true,obj:[{inboundId:3,protocol:'vless'}]});
+    if (p.endsWith('/clients/list')) return Response.json({success:true,obj:{rows:[],total:0}});
+    if (p.endsWith('/addClient')) { provisioned++; return Response.json({success:true}); }
+    throw Error('Unexpected panel route');
+  });
+
+  const buyer = browser(env,'192.0.2.20'), admin = browser(env,'192.0.2.21');
+  assert.equal((await buyer.request('register',{name:'Buyer',username:'buyer',password})).status,200);
+  assert.equal((await admin.request('login',{username:'owner',password})).status,200);
+  await buyer.init();
+  await admin.init();
+  for (const action of ['buy','buycat:1:0','plan_p10','buyname:custom']) await buyer.press(action);
+  await buyer.act({kind:'text',text:'BrowserClient'});
+  const order = sqlite.prepare('SELECT id,final_price,status FROM orders').get();
+  assert.equal(order.final_price,70000);
+  await buyer.press('card:pay:'+order.id);
+  assert.equal(buyer.state.input, 'image');
+  const oldRevision = buyer.state.revision;
+  await buyer.act({kind:'image', image});
+  assert.equal(sqlite.prepare('SELECT status FROM orders').get().status,'pending');
+  assert.equal((await buyer.request('action',{kind:'image',image,revision:oldRevision})).status,409);
+
+  for (const action of ['admin:root','web:orders','web:receipt:order:'+order.id]) await admin.press(action);
+  assert.equal((await buyer.request('receipt?kind=order&id='+order.id)).status,403);
+  assert.deepEqual((await admin.request('receipt?kind=order&id='+order.id)).data,testJPEG);
+  const approveRev = admin.state.revision;
+  await admin.press('approve_'+order.id);
+  assert.equal((await admin.request('action',{kind:'button',action:'approve_'+order.id,revision:approveRev})).status,409);
+  assert.equal(sqlite.prepare('SELECT status FROM orders').get().status,'approved');
+  assert.equal(provisioned,1);
+  assert.match(JSON.stringify((await buyer.request('inbox')).data),/ساخته شد/);
+
+  await buyer.act({kind:'home'});
+  await buyer.press('wallet:home');
+  await buyer.press('wallet:topup');
+  await buyer.act({kind:'text',text:'150000'});
+  await buyer.act({kind:'image',image});
+  const topup = sqlite.prepare('SELECT id,status FROM wallet_topups').get();
+  assert.equal(topup.status,'pending');
+  await admin.act({kind:'home'});
+  for (const action of ['admin:root','web:orders','web:receipt:topup:'+topup.id,'topup:approve:'+topup.id]) await admin.press(action);
+  assert.equal(sqlite.prepare('SELECT SUM(delta) n FROM wallet_entries').get().n,150000);
+  await buyer.act({kind:'home'});
+  for (const action of ['buy','buycat:1:0','plan_p10','buyname:custom']) await buyer.press(action);
+  await buyer.act({kind:'text',text:'WalletClient'});
+  const walletOrder = sqlite.prepare("SELECT id FROM orders WHERE service_name='WalletClient'").get();
+  await buyer.press('wallet:pay:'+walletOrder.id);
+  assert.equal(sqlite.prepare('SELECT status FROM orders WHERE id=?').get(walletOrder.id).status,'approved');
+  assert.equal(sqlite.prepare('SELECT SUM(delta) n FROM wallet_entries').get().n,80000);
+  assert.equal(provisioned,2);
+  assert.deepEqual(unexpected,[]);
+});
+
+test('HTTP standalone adapter accepts shop API only and binds to loopback', async t => {
+  const { env } = await fixture(t);
+  const http = await listenForWebShop((request,base)=>webShopRequest(request,base,handleUpdate), env, 0);
+  t.after(() => new Promise(resolve=>http.close(resolve)));
+  assert.equal(http.address().address,'127.0.0.1');
+  const url = 'http://127.0.0.1:'+http.address().port;
+  assert.equal((await fetch(url+'/webhook')).status,404);
+  assert.deepEqual(await (await fetch(url+'/shop/api/state')).json(),{signedIn:false});
+});
+
+test('panel credentials require HTTPS outside loopback', () => {
+  assert.throws(() => panelURL('http://panel.example/'), /HTTPS/);
+  assert.throws(() => panelURL('https://user:pass@panel.example/'), /HTTPS/);
+  assert.equal(panelURL('http://127.0.0.1:3456/base/'), 'http://127.0.0.1:3456/base');
+  assert.equal(panelURL('https://panel.example/path/'), 'https://panel.example/path');
+});
