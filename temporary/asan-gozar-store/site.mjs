@@ -41,6 +41,7 @@ export async function webStorePage(request, page, env) {
   const mark = escapeMarkup(name.match(firstLetter)[0].toLocaleUpperCase());
   const svg = pathname === '/favicon.svg';
   const markup = page.content.replaceAll(DEFAULT_BRAND, () => escaped)
+    .replaceAll('https://asan-gozar.ir/', () => env.WEB_SHOP_ORIGIN + '/')
     .replaceAll('<span class="logo-mark" aria-hidden="true">آ</span>', () => `<span class="logo-mark" aria-hidden="true">${mark}</span>`)
     .replace('<!-- store-mark -->آ', () => mark);
   const organization = JSON.stringify({
