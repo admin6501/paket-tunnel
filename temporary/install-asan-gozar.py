@@ -12,6 +12,7 @@ import re
 import secrets
 import sqlite3
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -19,13 +20,16 @@ import tarfile
 import tempfile
 import time
 
-DOMAIN = 'asan-gozar.ir'
+DOMAIN = os.environ.get('ASAN_GOZAR_DOMAIN', 'asan-gozar.ir').lower().strip().rstrip('.')
 WWW = 'www.' + DOMAIN
 USER = 'asan-gozar-store'
 APP = Path('/opt/asan-gozar-store')
 RUNTIME = Path('/opt/asan-gozar-node24')
 DATA = Path('/var/lib/asan-gozar-store')
 CONFIG = Path('/etc/asan-gozar-store/config.json')
+WEB_ROOT = Path('/var/www')
+MANAGED_VHOST = Path('/etc/nginx/sites-enabled/asan-gozar-store.conf')
+LETSENCRYPT = Path('/etc/letsencrypt/live')
 SNIPPET = Path('/etc/nginx/snippets/asan-gozar-shop.conf')
 SERVICE = Path('/etc/systemd/system/asan-gozar-store.service')
 INCLUDE = f'include {SNIPPET};'
@@ -35,6 +39,9 @@ USERNAME = re.compile(r'[a-z][a-z0-9_]{2,31}')
 PAGE_NAMES = ('index.html', 'account.html', 'prices.html', 'services.html', 'network.html',
               'status.html', 'faq.html', 'contact.html', 'favicon.svg', 'app.webmanifest')
 APP_ASSETS = ('app-install.js', 'app-worker.js', 'app-icon-180.png', 'app-icon-192.png', 'app-icon-512.png')
+PUBLIC_ASSETS = (*APP_ASSETS, 'store.js', 'store.css', 'prices.js', 'script.js', 'style.css', 'storefront.js',
+                 'tickets.js', 'server-room.webp', 'robots.txt', 'sitemap.xml')
+DOMAIN_PATTERN = re.compile(r'(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])')
 
 
 def owner_username():
@@ -82,6 +89,7 @@ def blocks(text):
                 return
             frame = stack.pop()
             if frame['key'] == 'server':
+                frame['end'] = token.end()
                 yield frame
             words, start = [], None
         else:
@@ -90,26 +98,69 @@ def blocks(text):
             words.append(v.strip('"\''))
 
 
+def server_blocks(files):
+    for path in sorted({p.resolve() for p in files}):
+        text = path.read_text(encoding='utf-8')
+        for block in blocks(text):
+            directives = block['directives']
+            names = {n for d in directives if d[0] == 'server_name' for n in d[1:]}
+            tls = any(d[0] == 'listen' and len(d) > 1 and
+                      (d[1] == '443' or d[1].endswith(':443')) for d in directives)
+            yield path, text, block, names, tls
+
+
+def dedicated_root(path, files, *, check_mount=True):
+    if path.is_symlink() or not path.is_absolute() or path != path.resolve() or WEB_ROOT not in path.parents:
+        raise ValueError(f'Expected a dedicated directory below {WEB_ROOT}: {path}')
+    for _, _, block, names, _ in server_blocks(files):
+        if names and names.issubset({DOMAIN, WWW}):
+            continue
+        for directive in block['directives']:
+            if directive[0] == 'root' and len(directive) == 2:
+                other = Path(directive[1]).resolve()
+                if other == path or other in path.parents or path in other.parents:
+                    raise ValueError(f'The site directory overlaps another Nginx site: {other}')
+    if check_mount:
+        refuse_mounted_tree(path)
+    return path
+
+
+def refuse_mounted_tree(path):
+    for entry in Path('/proc/self/mountinfo').read_text().splitlines():
+        mount = Path(re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), entry.split()[4]))
+        if mount == path or path in mount.parents:
+            raise ValueError(f'Refusing to remove files on a mounted path: {mount}')
+
+
+def remove_path(path):
+    if path.is_symlink() or not path.is_dir():
+        path.unlink(missing_ok=True)
+    else:
+        shutil.rmtree(path)
+
+
+def clean_old_site(root):
+    keep = set(PAGE_NAMES + PUBLIC_ASSETS) | {'.well-known'}
+    removed = 0
+    for path in root.iterdir():
+        if path.name not in keep:
+            remove_path(path)
+            removed += 1
+    print(f'Removed {removed} old website files or directories.', flush=True)
+
+
 def vhost_plan(files):
     matches = {DOMAIN: [], WWW: []}
     locations = {}
-    for path in sorted({p.resolve() for p in files}):
-        text = path.read_text(encoding='utf-8')
-        for b in blocks(text):
-            directives = b['directives']
-            names = {n for d in directives if d[0] == 'server_name' for n in d[1:]}
-            if not names.intersection(matches):
-                continue
-            tls = any(d[0] == 'listen' and len(d) > 1 and
-                      (d[1] == '443' or d[1].endswith(':443')) for d in directives)
-            if not tls:
-                continue
-            if not names.issubset(matches):
-                raise ValueError(f'Shared HTTPS server block found in {path}.')
-            key = (path, b['insert'])
-            locations[key] = (text, b)
-            for name in names:
-                matches[name].append(key)
+    for path, text, b, names, tls in server_blocks(files):
+        if not tls or not names.intersection(matches):
+            continue
+        if not names.issubset(matches):
+            raise ValueError(f'Shared HTTPS server block found in {path}.')
+        key = (path, b['insert'])
+        locations[key] = (text, b)
+        for name in names:
+            matches[name].append(key)
     if len(matches[DOMAIN]) != 1 or len(matches[WWW]) > 1:
         raise ValueError('Expected one active apex HTTPS block and at most one www HTTPS block.')
     apex = matches[DOMAIN][0]
@@ -117,22 +168,21 @@ def vhost_plan(files):
     add_alias = not matches[WWW]
     if add_alias:
         certificates = [Path(d[1]) for d in b['directives'] if d[0] == 'ssl_certificate' and len(d) == 2]
-        if not any(certificate.is_absolute() and certificate.is_file() and 'does match certificate' in
-                   subprocess.run(['openssl', 'x509', '-in', str(certificate), '-noout', '-checkhost', WWW],
-                                  capture_output=True, text=True).stdout for certificate in certificates):
-            raise ValueError('No www HTTPS block was found and the apex certificate could not be verified for www.')
-    www = apex if add_alias else matches[WWW][0]
+        add_alias = any(certificate.is_absolute() and certificate.is_file() and 'does match certificate' in
+                        subprocess.run(['openssl', 'x509', '-in', str(certificate), '-noout', '-checkhost', WWW],
+                                       capture_output=True, text=True).stdout for certificate in certificates)
+    www = apex if add_alias else (matches[WWW][0] if matches[WWW] else None)
     roots = [d[1] for d in b['directives'] if d[0] == 'root' and len(d) == 2]
     if len(roots) != 1 or not roots[0].startswith('/') or '$' in roots[0]:
         raise ValueError('Apex HTTPS server block needs a single absolute root directive.')
-    root = Path(roots[0]).resolve()
-    if not (root / 'index.html').is_file() or root in [Path('/'), Path('/var'), Path('/var/www'), Path('/var/lib')]:
-        raise ValueError(f'Existing site index not found in expected root: {root}')
+    root = dedicated_root(Path(roots[0]), files)
     if any(part.startswith('/shop') or part in tuple('/' + name for name in PAGE_NAMES)
            for loc in b['locations'] for part in loc):
         raise ValueError('An existing inline location conflicts with the store routes.')
     edits = {}
-    additions = [(apex, INCLUDE), (www, REDIRECT)]
+    additions = [(apex, INCLUDE)]
+    if www:
+        additions.append((www, REDIRECT))
     if add_alias:
         additions.append((apex, f'server_name {WWW};'))
     for key, directive in additions:
@@ -166,6 +216,161 @@ def atomic_text(path, text):
             os.replace(temp, path)
         finally:
             temp.unlink(missing_ok=True)
+
+
+def nginx_files():
+    return active_files(run('nginx', '-T', capture_output=True, text=True).stdout)
+
+
+def without_domain_blocks(files, *, http_only=False):
+    edits = {}
+    domains = {DOMAIN, WWW}
+    for path, text, block, names, tls in server_blocks(files):
+        if not names.intersection(domains) or (http_only and tls):
+            continue
+        if not names.issubset(domains):
+            raise ValueError(f'The domain shares a server block with another site in {path}.')
+        edits.setdefault(path, (text, []))[1].append((block['start'], block['end']))
+    changes = {}
+    for path, (original, ranges) in edits.items():
+        updated = original
+        for start, end in sorted(ranges, reverse=True):
+            updated = updated[:start] + updated[end:]
+        changes[path] = (original, updated)
+    return changes
+
+
+def provision_https(files):
+    root = dedicated_root(WEB_ROOT / 'asan_gozar_website', files)
+    certificate, key = (LETSENCRYPT / DOMAIN / name for name in ('fullchain.pem', 'privkey.pem'))
+    existing_cert = (certificate.is_file() and key.is_file() and
+                     subprocess.run(['openssl', 'x509', '-in', str(certificate), '-checkend', '86400', '-noout'],
+                                    capture_output=True).returncode == 0 and
+                     'does match certificate' in subprocess.run(['openssl', 'x509', '-in', str(certificate), '-noout', '-checkhost', DOMAIN],
+                                                               capture_output=True, text=True).stdout)
+    if not existing_cert:
+        try:
+            socket.getaddrinfo(DOMAIN, 80, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise ValueError(f'{DOMAIN} does not resolve. Point its DNS at this server first.') from exc
+        email = os.environ.get('ASAN_GOZAR_EMAIL')
+        if not email:
+            with open('/dev/tty', 'r', encoding='utf-8') as terminal:
+                print('Let’s Encrypt email: ', end='', flush=True)
+                email = terminal.readline().strip()
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
+            raise ValueError('Enter a valid email address for Let’s Encrypt.')
+        if not shutil.which('certbot'):
+            run('apt-get', 'update')
+            run('apt-get', 'install', '-y', 'certbot')
+    changes = without_domain_blocks(files, http_only=True)
+    if not MANAGED_VHOST.parent.is_dir() or MANAGED_VHOST.is_symlink() or (MANAGED_VHOST.exists() and MANAGED_VHOST not in changes):
+        raise ValueError(f'Cannot create the dedicated Nginx site: {MANAGED_VHOST}')
+    root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    root.chmod(0o755)
+    for directory in (root / '.well-known', root / '.well-known' / 'acme-challenge'):
+        if directory.is_symlink():
+            raise ValueError(f'Refusing a linked certificate validation directory: {directory}')
+        directory.mkdir(mode=0o755, exist_ok=True)
+        directory.chmod(0o755)
+    original, remaining = changes.pop(MANAGED_VHOST, (None, ''))
+    http = f'''server {{
+    listen 80;
+    listen [::]:80;
+    server_name {DOMAIN};
+    root {root};
+    location ^~ /.well-known/acme-challenge/ {{ try_files $uri =404; }}
+    location / {{ return {{fallback}}; }}
+}}
+'''
+    tls = f'''server {{
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {DOMAIN};
+    root {root};
+    ssl_certificate {certificate};
+    ssl_certificate_key {key};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    location / {{ try_files $uri =404; }}
+}}
+'''
+    applied = []
+    try:
+        for path, (old, new) in changes.items():
+            atomic_text(path, new)
+            applied.append((path, old))
+        if original is None:
+            with MANAGED_VHOST.open('x') as stream:
+                stream.write(remaining + http.replace('{fallback}', '503'))
+        else:
+            atomic_text(MANAGED_VHOST, remaining + http.replace('{fallback}', '503'))
+        applied.append((MANAGED_VHOST, original))
+        run('nginx', '-t')
+        run('systemctl', 'reload', 'nginx')
+        if not existing_cert:
+            run('certbot', 'certonly', '--webroot', '--webroot-path', str(root), '--domain', DOMAIN,
+                '--cert-name', DOMAIN, '--non-interactive', '--agree-tos', '--email', email,
+                '--keep-until-expiring', '--deploy-hook', 'systemctl reload nginx')
+            run('systemctl', 'enable', '--now', 'certbot.timer')
+        atomic_text(MANAGED_VHOST, remaining + http.replace('{fallback}', f'308 https://{DOMAIN}$request_uri') + tls)
+        run('nginx', '-t')
+        run('systemctl', 'reload', 'nginx')
+        return nginx_files()
+    except Exception:
+        for path, old in reversed(applied):
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_text(path, old)
+        subprocess.run(['systemctl', 'reload', 'nginx'], check=False)
+        raise
+
+
+def uninstall():
+    if not CONFIG.is_file():
+        raise ValueError('The Asan Gozar storefront is not installed.')
+    if json.loads(CONFIG.read_text()).get('origin') != f'https://{DOMAIN}':
+        raise ValueError('The selected domain does not match the installed storefront.')
+    files = nginx_files()
+    marker = CONFIG.parent / 'site-root'
+    if marker.is_file():
+        root = dedicated_root(Path(marker.read_text().strip()), files)
+    else:
+        root, _ = vhost_plan(files)
+    changes = without_domain_blocks(files)
+    paths = (APP, RUNTIME, DATA, CONFIG.parent)
+    for path in paths:
+        if path.is_symlink() or path != path.resolve():
+            raise ValueError(f'Refusing to remove a linked installation path: {path}')
+        refuse_mounted_tree(path)
+    applied = []
+    try:
+        for path, (old, new) in changes.items():
+            atomic_text(path, new)
+            applied.append((path, old))
+        run('nginx', '-t')
+        run('systemctl', 'reload', 'nginx')
+        if SERVICE.exists():
+            run('systemctl', 'disable', '--now', 'asan-gozar-store.service')
+    except Exception:
+        for path, old in reversed(applied):
+            atomic_text(path, old)
+        subprocess.run(['systemctl', 'reload', 'nginx'], check=False)
+        raise
+    if MANAGED_VHOST in changes and not changes[MANAGED_VHOST][1].strip():
+        MANAGED_VHOST.unlink(missing_ok=True)
+    SERVICE.unlink(missing_ok=True)
+    SNIPPET.unlink(missing_ok=True)
+    run('systemctl', 'daemon-reload')
+    for path in (root, *paths):
+        remove_path(path)
+    try:
+        account = pwd.getpwnam(USER)
+    except KeyError:
+        account = None
+    if account is not None and account.pw_dir == str(DATA):
+        run('userdel', USER)
+    print(f'Removed the storefront, database, and Nginx routes for {DOMAIN}.', flush=True)
 
 
 def node_tools(work):
@@ -223,7 +428,7 @@ def served_release(public, domain=DOMAIN, port=443):
     origin = f'https://{domain}:{port}'
     pages = {'/' + name: hashlib.sha256((public / name).read_bytes()).hexdigest().encode() for name in PAGE_NAMES}
     pages['/'] = pages['/index.html']
-    assets = {f'/{name}': (public / name).read_bytes() for name in ('storefront.js', 'store.css', 'store.js', 'tickets.js', *APP_ASSETS)}
+    assets = {f'/{name}': (public / name).read_bytes() for name in PUBLIC_ASSETS}
     failed = '/'
     loopback = ('--resolve', f'{domain}:{port}:127.0.0.1')
     for options in (loopback, (), loopback):
@@ -238,29 +443,36 @@ def served_release(public, domain=DOMAIN, port=443):
                     failed = route
                     break
             else:
-                if api_matches(origin, options):
-                    return
-                failed = '/shop/api/'
+                if not api_matches(origin, options):
+                    failed = '/shop/api/'
+                else:
+                    for route in ('/README.txt', '/shop/shop.css'):
+                        if get(origin + route, *options, '--no-fail', '--head', '--output', '/dev/null',
+                               '--write-out', '%{http_code}') != b'404':
+                            failed = route
+                            break
+                    else:
+                        return
         time.sleep(.5)
     raise RuntimeError(f'HTTPS did not serve the new release at {failed}. Check the active Nginx virtual host.')
 
 
 def main(archive):
-    if os.geteuid() != 0:
-        raise ValueError('Run the installer with sudo.')
     for cmd in ('nginx', 'systemctl', 'curl', 'tar', 'install', 'runuser', 'openssl'):
         if not shutil.which(cmd):
             raise ValueError(f'Missing command: {cmd}')
-    dump = run('nginx', '-T', capture_output=True, text=True)
-    root, changes = vhost_plan(active_files(dump.stdout))
     with archive.open('rb') as bundle_file:
         bundle_id = hashlib.file_digest(bundle_file, 'sha256').hexdigest()[:12]
     print(f'Installing store release {bundle_id}', flush=True)
-    print(f'Using existing site root {root}', flush=True)
     if CONFIG.exists():
         conf = json.loads(CONFIG.read_text())
         if conf.get('origin') != f'https://{DOMAIN}' or conf.get('port') != 8787 or not re.fullmatch(r'[a-fA-F0-9]{64}', conf.get('secret', '')):
             raise ValueError(f'Existing store configuration differs from expected origin or port: {CONFIG}')
+    files = nginx_files()
+    if not any(tls and DOMAIN in names for _, _, _, names, tls in server_blocks(files)):
+        files = provision_https(files)
+    root, changes = vhost_plan(files)
+    print(f'Using site root {root}', flush=True)
 
     with tempfile.TemporaryDirectory(prefix='asan-gozar-install-') as tmp:
         work = Path(tmp)
@@ -268,16 +480,19 @@ def main(archive):
             bundle.extractall(work, filter='data')
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
-        required = [source / 'package-lock.json', *(public / name for name in (
-            *PAGE_NAMES, *APP_ASSETS, 'store.js', 'store.css', 'prices.js', 'storefront.js', 'tickets.js', 'server-room.webp'))]
+        required = [source / 'package-lock.json', work / 'install-asan-gozar.py',
+                    *(public / name for name in PAGE_NAMES + PUBLIC_ASSETS)]
         if not all(path.is_file() for path in required):
             raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
             raise ValueError('Unexpected symbolic link in the installation paths.')
-        for asset in public.rglob('*'):
-            destination = root / asset.relative_to(public)
+        for name in PAGE_NAMES + PUBLIC_ASSETS:
+            destination = root / name
             if destination.is_symlink():
                 raise ValueError(f'Refusing linked site destination: {destination}')
+        for name in ('robots.txt', 'sitemap.xml'):
+            asset = public / name
+            asset.write_text(asset.read_text().replace('https://asan-gozar.ir/', f'https://{DOMAIN}/'))
         database = DATA / 'store.sqlite'
         owner = None
         if database.exists():
@@ -317,6 +532,7 @@ def main(archive):
             run('install', '-m', '0640', '-o', 'root', '-g', group, str(settings), str(CONFIG))
         # Files are read-only to the service user. Existing database remains separate.
         shutil.copytree(source, APP, dirs_exist_ok=True)
+        run('install', '-m', '0644', str(work / 'install-asan-gozar.py'), str(APP / 'install-asan-gozar.py'))
         site_pages = APP / 'site'
         site_pages.mkdir(mode=0o755, exist_ok=True)
         for name in PAGE_NAMES:
@@ -347,15 +563,12 @@ def main(archive):
                 atomic_text(path, updated)
                 applied.append(path)
             run('nginx', '-t')
-            for asset in public.rglob('*'):
-                dest = root / asset.relative_to(public)
-                if asset.is_dir():
-                    dest.mkdir(mode=0o755, parents=True, exist_ok=True)
-                elif asset.name != 'README.txt':
-                    if dest.is_symlink() or any(parent.is_symlink() for parent in dest.parents if parent != root and root in parent.parents):
-                        raise ValueError(f'Refusing linked site destination: {dest}')
-                    replaced[dest] = (dest.read_bytes(), dest.stat()) if dest.is_file() else None
-                    run('install', '-m', '0644', str(asset), str(dest))
+            for name in PAGE_NAMES + PUBLIC_ASSETS:
+                dest = root / name
+                if dest.is_symlink():
+                    raise ValueError(f'Refusing linked site destination: {dest}')
+                replaced[dest] = (dest.read_bytes(), dest.stat()) if dest.is_file() else None
+                run('install', '-m', '0644', str(public / name), str(dest))
             run('systemctl', 'reload', 'nginx')
             served_release(public)
         except Exception:
@@ -375,15 +588,26 @@ def main(archive):
                 SNIPPET.write_bytes(old_snippet)
             subprocess.run(['systemctl', 'reload', 'nginx'], check=False)
             raise
+        marker = work / 'site-root'
+        marker.write_text(str(root) + '\n')
+        run('install', '-m', '0600', str(marker), str(CONFIG.parent / 'site-root'))
+        clean_old_site(root)
     print(f'Installed and verified over HTTPS ({bundle_id}). Store: https://{DOMAIN}/  |  Admin username: {username}')
     print(f'Ticket management: https://{DOMAIN}/account.html?support=manage#tickets')
 
 
 if __name__ == '__main__':
     try:
+        if os.geteuid() != 0:
+            raise ValueError('Run the installer with sudo.')
+        if not DOMAIN_PATTERN.fullmatch(DOMAIN):
+            raise ValueError('Enter a valid domain name without https:// or a path.')
         if len(sys.argv) != 2:
             raise ValueError('Pass the path to asan-gozar-standalone.tar.gz.')
-        main(Path(sys.argv[1]).resolve(strict=True))
+        if sys.argv[1] == '--uninstall':
+            uninstall()
+        else:
+            main(Path(sys.argv[1]).resolve(strict=True))
     except (ValueError, OSError, EOFError, RuntimeError, sqlite3.Error, subprocess.CalledProcessError, tarfile.TarError) as error:
         print(f'Installation stopped: {error}', file=sys.stderr)
         sys.exit(1)
