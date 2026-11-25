@@ -300,7 +300,9 @@ export async function webShopReview(env, uid, action) {
     ? await first(env, 'SELECT final_price AS amount,user_id,status FROM orders WHERE id=?', Number(reference))
     : await first(env, 'SELECT amount,user_id,status FROM wallet_topups WHERE id=?', Number(reference));
   const receipt = result && await first(env, 'SELECT 1 FROM web_shop_receipts WHERE kind=? AND reference=? AND expires_at>?', kind, Number(reference), Date.now());
-  const back = [{ text: 'فیش‌ها', callback_data: 'web:orders' }];
+  const back = kind === 'order' && result?.status === 'needs_review'
+    ? [{ text: 'بازگشت به بررسی سفارش', callback_data: `admin:wallet_review:${reference}` }]
+    : [{ text: 'فیش‌ها', callback_data: 'web:orders' }];
   if (!receipt) return { text: 'تصویر این فیش در دسترس نیست.', buttons: [back] };
   const caption = `فیش ${kind === 'order' ? 'سفارش' : 'شارژ'} ${reference}\nکاربر: ${result.user_id}\nمبلغ: ${Number(result.amount).toLocaleString('fa-IR')} تومان`;
   const image = `${PREFIX}receipt?kind=${kind}&id=${reference}`;

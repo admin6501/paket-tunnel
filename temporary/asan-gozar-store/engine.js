@@ -1293,6 +1293,7 @@ async function storeUserIdentity(env,id,cached) {
 }
 const adminTime = value => /^\d{12,13}$/.test(String(value || "")) ? new Date(Number(value)).toLocaleString("fa-IR",{timeZone:"Asia/Tehran"}) : String(value || "—");
 const adminOrderStatus = status => ({draft:"پیش‌نویس",pending:"منتظر تأیید",approved:"تأییدشده",needs_fix:"نیازمند اصلاح",needs_review:"نیازمند بررسی",needs_review_refunded:"نیازمند بررسی؛ وجه برگشت داده شد",wallet_processing:"در حال پرداخت",wallet_failed_refunded:"ناموفق؛ وجه برگشت داده شد",wallet_review_resolved:"بررسی‌شده"}[status] || status || "—");
+const reviewOrderStatuses = "status IN ('needs_review','needs_review_refunded')";
 const messageJobStatus = status => ({draft:"پیش‌نویس",building:"در حال آماده‌سازی",queued:"در صف ارسال",done:"پایان‌یافته",cancelled:"متوقف‌شده"}[status] || "نامشخص");
 const adminBack = (target = "admin:root") => kb([[btn("🔙 بازگشت", target)]]);
 const adminHomeKb = () => kb([
@@ -1882,17 +1883,51 @@ async function handleAdminUICallback(c, cq, answer) {
     const nav=[];if(page>0)nav.push(btn("◀️ قبلی",`admin:${kind}:${target}:${page-1}`));if(rows.length>10)nav.push(btn("بعدی ▶️",`admin:${kind}:${target}:${page+1}`));const buttons=[];if(kind === "us")for(const service of rows.slice(0,10))buttons.push([btn(`مدیریت ${String(service.name || service.id).slice(0,35)}`,`admin:svc:${service.id}`)]);if(nav.length)buttons.push(nav);buttons.push([btn("🔙 بازگشت",`admin:user:${target}`)]);
     return renderAdmin(`<b>${title}</b> — کاربر <code>${target}</code>\nصفحه ${page+1}\n\n${lines.join("\n") || "موردی ثبت نشده است."}`,kb(buttons));
   }
-  if (d === "admin:wallet_reviews") {
-    const rows=await all(env,"SELECT id,user_id,final_price FROM orders WHERE status='needs_review_refunded' ORDER BY id DESC LIMIT 20");
-    const keys=rows.map(x=>[btn(`سفارش ${x.id} — ${x.user_id}`,`admin:wallet_review:${x.id}`)]);keys.push([btn("🔙 بازگشت","admin:root")]);
-    return renderAdmin(rows.length ? "⚠️ <b>سفارش‌های برگشت‌وجه‌شده و نیازمند بررسی</b>" : "سفارش نیازمند بررسی وجود ندارد.",kb(keys));
+  if (/^admin:wallet_reviews(?::\d+)?$/.test(d)) {
+    const cursor = d.split(':')[2];
+    if (cursor && !positiveId(cursor)) return answer('صفحه نامعتبر است.', true);
+    const rows = await all(env, `SELECT id,user_id,status FROM orders WHERE ${reviewOrderStatuses}
+      ${cursor ? 'AND id<?' : ''} ORDER BY id DESC LIMIT 21`, ...(cursor ? [Number(cursor)] : []));
+    const page = rows.slice(0, 20);
+    const buttons = page.map(order => {
+      const type = order.status === 'needs_review_refunded' ? 'کیف پول (وجه برگشته)' : 'کارت‌به‌کارت';
+      return [btn(`سفارش ${order.id} · ${type} · کاربر ${order.user_id ?? '—'}`, `admin:wallet_review:${order.id}`)];
+    });
+    const navigation = [];
+    if (cursor) navigation.push(btn('جدیدترین سفارش‌ها', 'admin:wallet_reviews'));
+    if (rows.length > page.length) navigation.push(btn('سفارش‌های قدیمی‌تر', `admin:wallet_reviews:${page.at(-1).id}`));
+    if (navigation.length) buttons.push(navigation);
+    buttons.push([btn('بازگشت', 'admin:root')]);
+    return renderAdmin(rows.length ? '<b>سفارش‌های قابل بررسی</b>' : 'سفارش نیازمند بررسی وجود ندارد.', kb(buttons));
   }
   if (d.startsWith("admin:wallet_review:")) {
     const id=Number(d.slice("admin:wallet_review:".length)); if(!Number.isSafeInteger(id)||id<=0)return answer("شناسه نامعتبر است.",true);
-    const order=await first(env,"SELECT * FROM orders WHERE id=? AND status='needs_review_refunded'",id);
+    const order=await first(env, `SELECT * FROM orders WHERE id=? AND ${reviewOrderStatuses}`, id);
     if(!order)return answer("سفارش نیازمند بررسی پیدا نشد.",true);
-    const attempt=await first(env,"SELECT email FROM provision_attempts WHERE attempt_key LIKE ? ORDER BY rowid DESC LIMIT 1",`order:${id}:%`);
-    return renderAdmin(`⚠️ <b>سفارش ${id}</b>\nکاربر: <code>${order.user_id}</code>\nمبلغ برگشتی: ${toman(order.final_price)}\nحساب پنل: <code>${esc(attempt?.email || "نامشخص یا تمدید")}</code>\n\nموجودی بازگشته است. ممکن است عملیات پنل انجام شده باشد؛ پیش از هر اقدام، پنل و سرویس را بررسی کنید.`,kb([[btn("✅ بررسی شد",`admin:wallet_close:${id}`)],[btn("🔙 بازگشت","admin:wallet_reviews")]]));
+    const attempt = await first(env, 'SELECT email,inbound_id FROM provision_attempts WHERE attempt_key LIKE ? ORDER BY rowid DESC LIMIT 1', `order:${id}:%`);
+    const refunded = order.status === 'needs_review_refunded';
+    const lines = [
+      `<b>سفارش ${id}</b>`,
+      `کاربر: <code>${esc(order.user_id ?? '—')}</code>`,
+      `نام سرویس: ${esc(order.service_name || '—')}`,
+      `زمان ثبت: ${esc(adminTime(order.created_at))}`,
+      `پرداخت: ${refunded ? 'کیف پول' : 'کارت‌به‌کارت'}`,
+      `${refunded ? 'مبلغ برگشتی' : 'مبلغ سفارش'}: ${toman(order.final_price)}`,
+    ];
+    if (order.renew_service_id) lines.push(`شناسهٔ سرویس برای تمدید: <code>${esc(order.renew_service_id)}</code>`);
+    else if (attempt) lines.push(`حساب پنل: <code>${esc(attempt.email)}</code>`, `ورودی اولیه: <code>${esc(attempt.inbound_id)}</code>`);
+    const buttons = [];
+    if (refunded) {
+      lines.push('', 'مبلغ به کیف پول برگشته است. وضعیت سرویس را در VPN-UI بررسی کنید.');
+      buttons.push([btn('بررسی شد', `admin:wallet_close:${id}`)]);
+    } else {
+      lines.push('', 'ممکن است ساخت یا تمدید سرویس در VPN-UI انجام شده باشد. وضعیت همان سرویس را بررسی کنید.');
+      if (env.WEB_STATE && await first(env, "SELECT 1 FROM web_shop_receipts WHERE kind='order' AND reference=? AND expires_at>?", id, Date.now())) {
+        buttons.push([btn('مشاهدهٔ رسید پرداخت', `web:receipt:order:${id}`)]);
+      } else if (env.WEB_STATE) lines.push('تصویر رسید در دسترس نیست.');
+    }
+    buttons.push([btn('بازگشت به سفارش‌های قابل بررسی', 'admin:wallet_reviews')]);
+    return renderAdmin(lines.join('\n'), kb(buttons));
   }
   if (d.startsWith("admin:wallet_close:")) {
     const id=Number(d.slice("admin:wallet_close:".length));if(!Number.isSafeInteger(id)||id<=0)return answer("شناسه نامعتبر است.",true);
