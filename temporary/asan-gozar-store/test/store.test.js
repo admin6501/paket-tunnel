@@ -30,10 +30,11 @@ function browser(env, ip) {
   let cookie = '';
   let state;
   async function request(path, body, from = origin) {
+    const binary = body instanceof Uint8Array;
     const res = await webShopRequest(new Request(`${origin}/shop/api/${path}`, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { Origin: from, Cookie: cookie, 'Content-Type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { Origin: from, Cookie: cookie, 'Content-Type': binary ? 'image/jpeg' : 'application/json' },
+      ...(body === undefined ? {} : { body: binary ? body : JSON.stringify(body) }),
     }), { ...env, WEB_SHOP_IP: ip }, handleUpdate);
     const set = res.headers.get('set-cookie');
     if (set) {
@@ -119,6 +120,63 @@ test('ticket queue routes private threads, replies, assignments and existing inb
   assert.equal(imported.status, 201);
   assert.deepEqual((await admin.request('admin/tickets/import-inbox', { messageId })).data, imported.data);
   assert.equal((await buyer.request('tickets/' + imported.data.id)).data.messages[0].body, 'پیام قدیمی <متن>');
+});
+
+test('ticket photos attach atomically, respect separate limits and keep internal photos private', async t => {
+  const { env, sqlite } = await fixture(t);
+  const admin = browser(env, '192.0.2.201'), buyer = browser(env, '192.0.2.202'), stranger = browser(env, '192.0.2.203');
+  assert.equal((await buyer.request('uploads/ticket', testJPEG)).status, 401);
+  await admin.request('login', { username: 'owner', password });
+  await admin.init();
+  await admin.press('admin:root');
+  await admin.press('admin:settings');
+  assert.ok(admin.buttons().includes('web:uploads'));
+  await buyer.request('register', { name: 'Buyer', username: 'buyer', password });
+  await stranger.request('register', { name: 'Stranger', username: 'stranger', password });
+  const limits = { ticketKiB: 128, receiptKiB: 1024 };
+  assert.equal((await buyer.request('admin/uploads', limits)).status, 403);
+  assert.equal((await admin.request('admin/uploads', { ...limits, ticketKiB: 5121 })).status, 400);
+  assert.deepEqual((await admin.request('admin/uploads', limits)).data, limits);
+  assert.deepEqual((await buyer.request('uploads')).data, { ...limits, maxImages: 4, minKiB: 128, maxKiB: 5120 });
+  const tooLarge = new Uint8Array(128 * 1024 + 1);
+  assert.equal((await buyer.request('uploads/ticket', tooLarge)).status, 413);
+  assert.equal((await buyer.request('uploads/ticket', new Uint8Array([1, 2, 3, 4]))).status, 415);
+  assert.equal((await buyer.request('uploads/ticket', testJPEG, 'https://other.example')).status, 403);
+  const stage = async browser => {
+    const result = await browser.request('uploads/ticket', testJPEG);
+    assert.equal(result.status, 201);
+    return result.data.id;
+  };
+  const first = await stage(buyer), second = await stage(buyer), other = await stage(stranger);
+  const request = { department: 1, subject: 'اختلال اتصال', message: '', priority: 'high' };
+  assert.equal((await buyer.request('tickets', { ...request, images: [first, other] })).status, 409);
+  assert.equal((await buyer.request('tickets', { ...request, images: [first, first] })).status, 400);
+  assert.equal((await buyer.request('tickets', { ...request, images: [first], priority: 'invalid' })).status, 400);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM store_tickets').get().n, 0);
+  const opened = await buyer.request('tickets', { ...request, images: [second, first] });
+  assert.equal(opened.status, 201);
+  const base = `tickets/${opened.data.id}`;
+  const data = (await buyer.request(base)).data;
+  assert.equal(data.ticket.priority, 'high');
+  assert.deepEqual(data.messages[0].images, [second, first]);
+  assert.match(JSON.stringify((await admin.request('inbox')).data), /staffTicket=/);
+  assert.deepEqual((await buyer.request(base + '/images/' + first)).data, testJPEG);
+  assert.deepEqual((await admin.request('admin/' + base + '/images/' + second)).data, testJPEG);
+  assert.equal((await stranger.request(base + '/images/' + first)).status, 404);
+  assert.equal((await buyer.request(base + '/images/' + other)).status, 404);
+  assert.equal((await buyer.request(base + '/update', { version: 0, priority: 'urgent' })).status, 200);
+  assert.equal((await buyer.request(base + '/update', { version: 0, priority: 'low' })).status, 409);
+  assert.equal((await buyer.request(base + '/update', { version: 1, priority: 'low', status: 'resolved' })).status, 403);
+  assert.equal((await admin.request('admin/' + base)).data.ticket.priority, 'urgent');
+  const internal = await stage(admin);
+  assert.equal((await admin.request('admin/' + base + '/reply', { version: 1, message: '', internal: true, images: [internal] })).status, 200);
+  assert.equal((await buyer.request(base + '/images/' + internal)).status, 404);
+  assert.deepEqual((await admin.request('admin/' + base + '/images/' + internal)).data, testJPEG);
+  assert.equal((await buyer.request(base + '/reply', { version: 2, message: '', images: [first] })).status, 409);
+  const followUp = await stage(buyer);
+  assert.equal((await buyer.request(base + '/reply', { version: 2, message: '', images: [followUp] })).status, 200);
+  assert.deepEqual((await buyer.request(base)).data.messages.at(-1).images, [followUp]);
+  assert.deepEqual((await buyer.request(base + '/images/' + first)).data, testJPEG);
 });
 
 test('admin branding is quoted safely and published across every store page and icon', async t => {
@@ -378,6 +436,7 @@ test('card purchase and wallet top-up are reviewed in the web admin without an e
   const buyer = browser(env,'192.0.2.20'), admin = browser(env,'192.0.2.21');
   assert.equal((await buyer.request('register',{name:'Buyer',username:'buyer',password})).status,200);
   assert.equal((await admin.request('login',{username:'owner',password})).status,200);
+  assert.equal((await admin.request('admin/uploads', { receiptKiB: 128, ticketKiB: 5120 })).status, 200);
   await buyer.init();
   await admin.init();
   for (const action of ['buy','buycat:1:0','plan_p10','buyname:custom']) await buyer.press(action);
@@ -386,7 +445,10 @@ test('card purchase and wallet top-up are reviewed in the web admin without an e
   assert.equal(order.final_price,70000);
   await buyer.press('card:pay:'+order.id);
   assert.equal(buyer.state.input, 'image');
+  assert.equal(buyer.state.receiptKiB, 128);
   const oldRevision = buyer.state.revision;
+  const oversized = Buffer.alloc(128 * 1024 + 1024).toString('base64');
+  assert.equal((await buyer.request('action', { kind: 'image', image: oversized, revision: oldRevision })).status, 413);
   await buyer.act({kind:'image', image});
   assert.equal(sqlite.prepare('SELECT status FROM orders').get().status,'pending');
   assert.equal((await buyer.request('action',{kind:'image',image,revision:oldRevision})).status,409);

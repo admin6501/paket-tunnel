@@ -1835,7 +1835,8 @@ async function handleAdminUICallback(c, cq, answer) {
   if (d === "admin:settings") {
     delete st.admin_ui_step; delete st.admin_ui_key;
     const rows = [];
-    if (env.WEB_STATE) rows.push([btn('نام برند سایت', 'web:brand'), btn('ویرایش نام نمایشی من', 'web:profile')]);
+    if (env.WEB_STATE) rows.push([btn('نام برند سایت', 'web:brand'), btn('ویرایش نام نمایشی من', 'web:profile')],
+      [btn('سقف حجم تصاویر', 'web:uploads')]);
     if (owner) rows.push([btn("➕ افزودن یا تنظیم اتصال پنل", "admin:panelsetup")]);
     if (owner) rows.push([btn('➕ افزودن پنل دیگر','admin:multipanel_add')]);
     if (owner) rows.push([btn('🖥 پنل‌های متصل','admin:multipanels')]);

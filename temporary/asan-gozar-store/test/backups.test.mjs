@@ -25,7 +25,11 @@ test('restore is authenticated, preserves owner credentials and replaces persist
   store.sqlite.exec(`INSERT INTO plans VALUES('test',10,40000,0);
     INSERT INTO orders(id,status) VALUES(1,'approved');
     INSERT INTO store_inbox(user_id,html,created_at) VALUES(2,'first message',1);
-    INSERT INTO web_shop_sessions(token,user_id,expires_at) VALUES('old-session',2,99);`);
+    INSERT INTO web_shop_sessions(token,user_id,expires_at) VALUES('old-session',2,99);
+    INSERT INTO store_tickets(id,customer_id,department_id,subject,created_at,updated_at) VALUES(1,2,1,'Ticket',1,1);
+    INSERT INTO store_ticket_messages(id,ticket_id,actor_id,kind,body,created_at) VALUES(1,1,2,'customer','Photo',1);
+    INSERT INTO store_ticket_images(id,message_id,data) VALUES('attached',1,x'FFD8FFD9');
+    INSERT INTO store_ticket_images(id,session_token,expires_at,data) VALUES('pending','old-session',2,x'FFD8FFD9');`);
   const fileBytes = manager.download();
   assert.ok(!fileBytes.includes('SQLite format 3'));
   assert.ok(!fileBytes.includes('first message'));
@@ -52,6 +56,8 @@ test('restore is authenticated, preserves owner credentials and replaces persist
   assert.equal(store.sqlite.prepare('SELECT price FROM plans').get().price, 40000);
   assert.equal(store.sqlite.prepare('SELECT html FROM store_inbox').get().html, 'first message');
   assert.equal(store.sqlite.prepare('SELECT count(*) AS n FROM web_shop_sessions').get().n, 0);
+  assert.equal(store.sqlite.prepare("SELECT hex(data) AS bytes FROM store_ticket_images WHERE id='attached'").get().bytes, 'FFD8FFD9');
+  assert.equal(store.sqlite.prepare("SELECT 1 FROM store_ticket_images WHERE id='pending'").get(), undefined);
   assert.equal(store.sqlite.prepare('SELECT salt FROM store_accounts WHERE id=1').get().salt, 'new-owner-salt');
   assert.equal(store.sqlite.prepare("SELECT value FROM settings WHERE key='store_account_id_floor'").get().value, '30');
   assert.equal(store.sqlite.prepare("SELECT seq FROM sqlite_sequence WHERE name='orders'").get().seq, 40);

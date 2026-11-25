@@ -23,6 +23,10 @@ function syncPath(path) {
 
 function removeSessions(sqlite) {
   sqlite.exec('DELETE FROM web_shop_sessions; DELETE FROM web_shop_limits;');
+  if (sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE name='store_ticket_images'").get()) {
+    return sqlite.prepare('DELETE FROM store_ticket_images WHERE message_id IS NULL').run().changes > 0;
+  }
+  return false;
 }
 
 function restoreData(snapshot, current, ownerId) {
@@ -75,7 +79,9 @@ export function createStoreBackups(database, secret, getStore, setStore, idle) {
         const file = join(directory, 'snapshot.sqlite');
         getStore().sqlite.prepare('VACUUM INTO ?').run(file);
         const snapshot = new DatabaseSync(file);
-        try { removeSessions(snapshot); } finally { snapshot.close(); }
+        try {
+          if (removeSessions(snapshot)) snapshot.exec('VACUUM');
+        } finally { snapshot.close(); }
         if (statSync(file).size + overhead > BACKUP_LIMIT) {
           throw new BackupError('اندازهٔ نسخهٔ پشتیبان بیشتر از ۶۴ مگابایت است.', 413);
         }

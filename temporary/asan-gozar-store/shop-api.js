@@ -3,14 +3,15 @@ import { deliverToInbox } from './inbox.js';
 import { BACKUP_LIMIT, BackupError } from './backups.mjs';
 import { BRAND_KEY, brandText, readBrand, validBrandName } from './brand.mjs';
 import { ticketRequest } from './tickets.mjs';
+import { isJPEG, MAX_IMAGE_KIB, MAX_TICKET_IMAGES, MIN_IMAGE_KIB, parseUploadLimits, privateJPEG, readUploadLimits, UPLOAD_SETTINGS } from './uploads.mjs';
 
 const PREFIX = '/shop/api/';
 const SESSION_COOKIE = '__Host-ag-session';
 const SESSION_TTL = 12 * 60 * 60_000;
 const RECEIPT_TTL = 30 * 24 * 60 * 60_000;
 const TOKEN = /^[a-zA-Z0-9_-]{32}$/;
-const IMAGE_LIMIT = 600_000;
 const BODY_LIMIT = 810_000;
+const TICKET_UPLOAD_TTL = 20 * 60_000;
 const NOTICE_KEY = 'website_notice';
 const emptyNotice = { active: false, kind: 'outage', title: '', message: '' };
 const noticeKinds = new Set(['outage', 'maintenance', 'notice']);
@@ -58,9 +59,9 @@ async function readBytes(request, maximum) {
   } catch { return null; }
 }
 
-async function readBody(request) {
+async function readBody(request, maxBytes = BODY_LIMIT) {
   if (!/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || '')) return null;
-  const bytes = await readBytes(request, BODY_LIMIT);
+  const bytes = await readBytes(request, maxBytes);
   if (!bytes) return null;
   try {
     const body = JSON.parse(new TextDecoder().decode(bytes));
@@ -68,16 +69,11 @@ async function readBody(request) {
   } catch { return null; }
 }
 
-function validImage(value) {
-  if (typeof value !== 'string' || value.length > Math.ceil(IMAGE_LIMIT / 3) * 4 ||
+function validImage(value, maxBytes = MAX_IMAGE_KIB * 1024) {
+  if (typeof value !== 'string' || value.length % 4 !== 0 || value.length > Math.ceil(maxBytes / 3) * 4 ||
       !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
-  try {
-    const bytes = Uint8Array.from(atob(value), char => char.charCodeAt(0));
-    if (bytes.length < 4 || bytes.length > IMAGE_LIMIT ||
-        bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff ||
-        bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) return null;
-    return bytes;
-  } catch { return null; }
+  const bytes = Buffer.from(value, 'base64');
+  return bytes.length <= maxBytes && isJPEG(bytes) ? bytes : null;
 }
 
 function rows(markup) {
@@ -94,6 +90,28 @@ function publicState(session) {
     : (admin_ui_step || admin_step || ['purchase_name_choice','service_name','test_name','wallet_amount','invite_code_input','coupon_code'].includes(step)) ? 'text'
     : ['receipt','wallet_receipt'].includes(step) ? 'image' : null;
   return { signedIn: true, admin: Boolean(session.admin_access), revision: session.revision, messages: JSON.parse(session.view_json), input };
+}
+
+async function respondState(env, session) {
+  const state = publicState(session);
+  if (state.input === 'image') state.receiptKiB = (await readUploadLimits(env.DB)).receiptKiB;
+  return json(state);
+}
+
+async function stageTicketImage(request, env, session) {
+  if (request.headers.get('content-type') !== 'image/jpeg') return json({ error: 'فرمت تصویر پیوست معتبر نیست.' }, 415);
+  const { ticketKiB } = await readUploadLimits(env.DB);
+  const bytes = await readBytes(request, ticketKiB * 1024);
+  if (!bytes) return json({ error: `حجم هر تصویر تیکت حداکثر ${ticketKiB} کیلوبایت است.` }, 413);
+  if (!isJPEG(bytes)) return json({ error: 'تصویر پیوست معتبر نیست.' }, 415);
+  const id = crypto.randomUUID().replaceAll('-', '');
+  const now = Date.now();
+  const result = await run(env, `INSERT INTO store_ticket_images(id,session_token,expires_at,data)
+    SELECT ?,?,?,? FROM web_shop_sessions WHERE token=? AND expires_at>? AND
+    (SELECT COUNT(*) FROM store_ticket_images WHERE message_id IS NULL AND session_token=? AND expires_at>?)<?`,
+    id, session.token, now + TICKET_UPLOAD_TTL, bytes, session.token, now, session.token, now, MAX_TICKET_IMAGES * 3);
+  return result.meta.changes ? json({ id }, 201)
+    : json({ error: 'تصاویر در انتظار ثبت به سقف رسیده‌اند یا نشست پایان یافته است.' }, 409);
 }
 
 async function isAdmin(env, uid) {
@@ -300,6 +318,7 @@ export async function pruneWebShop(env) {
     env.DB.prepare('DELETE FROM web_shop_sessions WHERE expires_at<=? AND busy_until<=?').bind(now - RECEIPT_TTL, now),
     env.DB.prepare('DELETE FROM web_shop_limits WHERE expires_at<=?').bind(now),
     env.DB.prepare('DELETE FROM web_shop_receipts WHERE expires_at<=?').bind(now),
+    env.DB.prepare('DELETE FROM store_ticket_images WHERE message_id IS NULL AND expires_at<=?').bind(now),
   ]);
 }
 
@@ -398,8 +417,22 @@ export async function webShopRequest(request, env, update) {
       [cookie(SESSION_COOKIE, '', 0)]);
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
-  if (route === 'state' && request.method === 'GET') return json(publicState(session));
+  if (route === 'state' && request.method === 'GET') return respondState(env, session);
   if (route === 'profile') return accountProfile(request, env, session);
+  if (route === 'uploads' && request.method === 'GET') {
+    return json({ ...await readUploadLimits(env.DB), maxImages: MAX_TICKET_IMAGES, minKiB: MIN_IMAGE_KIB, maxKiB: MAX_IMAGE_KIB });
+  }
+  if (route === 'admin/uploads' && request.method === 'POST') {
+    if (!admin) return json({ error: 'دسترسی ندارید.' }, 403);
+    const limits = parseUploadLimits(await readBody(request));
+    if (!limits) return json({ error: `اندازه را بین ${MIN_IMAGE_KIB} تا ${MAX_IMAGE_KIB} کیلوبایت وارد کنید.` }, 400);
+    return await saveAdminSetting(env, session, UPLOAD_SETTINGS, JSON.stringify(limits))
+      ? json(limits) : json({ error: 'دوباره وارد شوید.' }, 401);
+  }
+  if (route === 'uploads/ticket' && request.method === 'POST') {
+    if (await limited(env, `uploads:${session.user_id}`, 20)) return json({ error: 'لطفاً کمی صبر کنید و دوباره تلاش کنید.' }, 429);
+    return stageTicketImage(request, env, session);
+  }
   if (/^(admin\/)?tickets(?:\/|$)/.test(route)) {
     if (request.method === 'POST' && await limited(env, `ticket:${session.user_id}`, route === 'tickets' ? 8 : 30)) {
       return json({ error: 'لطفاً کمی صبر کنید و دوباره تلاش کنید.' }, 429);
@@ -450,18 +483,22 @@ export async function webShopRequest(request, env, update) {
     const receipt = ['order','topup'].includes(kind) && Number.isSafeInteger(id) &&
       await first(env, 'SELECT image FROM web_shop_receipts WHERE kind=? AND reference=? AND expires_at>?', kind, id, now);
     const bytes = receipt && validImage(receipt.image);
-    return bytes ? new Response(bytes, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin' } })
+    return bytes ? privateJPEG(bytes)
       : json({ error: 'فیش یافت نشد.' }, 404);
   }
   if (route !== 'action' || request.method !== 'POST') return json({ error: 'یافت نشد.' }, 404);
   if (await limited(env, `actor:${session.user_id}`, 30)) return json({ error: 'لطفاً کمی صبر کنید.' }, 429);
-  const body = await readBody(request);
+  const input = publicState(session).input;
+  const receiptKiB = input === 'image' ? (await readUploadLimits(env.DB)).receiptKiB : 0;
+  const maxReceiptBytes = receiptKiB * 1024;
+  const body = await readBody(request, receiptKiB ? Math.ceil(maxReceiptBytes / 3) * 4 + 1024 : BODY_LIMIT);
+  if (!body && receiptKiB) return json({ error: `حجم تصویر فیش حداکثر ${receiptKiB} کیلوبایت است.` }, 413);
   if (!body || body.revision !== session.revision) return json({ error: 'صفحه را تازه کنید.' }, 409);
   const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action)
-    .filter(action => !['web:backup','web:notice','web:brand','web:tickets','web:ticket-admin','web:profile'].includes(action) && !action?.startsWith('web:reset_password:'));
+    .filter(action => !['web:backup','web:notice','web:brand','web:tickets','web:ticket-admin','web:profile','web:uploads'].includes(action) && !action?.startsWith('web:reset_password:'));
   const state = JSON.parse(session.state_json);
-  const image = body.kind === 'image' && validImage(body.image);
-  const input = publicState(session).input;
+  const image = body.kind === 'image' && receiptKiB > 0 && validImage(body.image, maxReceiptBytes);
+  if (body.kind === 'image' && receiptKiB && !image) return json({ error: `تصویر معتبر با حجم حداکثر ${receiptKiB} کیلوبایت انتخاب کنید.` }, 400);
   const typed = typeof body.text === 'string' && body.text.trim().length > 0 && body.text.length <= 3500 &&
     (input === 'password' || !body.text.trimStart().startsWith('/'));
   const valid = body.kind === 'home' || (body.kind === 'button' && typeof body.action === 'string' && choices.includes(body.action)) ||
@@ -521,7 +558,7 @@ export async function webShopRequest(request, env, update) {
     await run(env, `UPDATE web_shop_sessions SET busy_until=0,state_json=?,view_json=?
       WHERE token=? AND revision=?`, JSON.stringify(settings.state), JSON.stringify(view), sessionKey, session.revision + 1);
   }
-  return json(publicState({ ...session, revision: session.revision + 1, state_json: JSON.stringify(settings.state), view_json: JSON.stringify(view) }));
+  return respondState(env, { ...session, revision: session.revision + 1, state_json: JSON.stringify(settings.state), view_json: JSON.stringify(view) });
 }
 
 export function isWebShopPath(pathname) {

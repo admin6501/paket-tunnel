@@ -229,6 +229,17 @@ body.light #status.error { color: #a42234; }
 .ticket-message[data-kind=event], .ticket-message[data-kind=note] { border-inline-start-color: #c49a55; background: var(--surface2); }
 .ticket-message > header { display: flex; flex-wrap: wrap; gap: .25rem .65rem; align-items: center; }
 .ticket-message p { white-space: pre-wrap; overflow-wrap: anywhere; margin: .45rem 0 0; }
+.ticket-files { display: grid; gap: .3rem; padding: 0; margin: 0; list-style: none; }
+.ticket-files li { display: flex; align-items: center; gap: .65rem; overflow-wrap: anywhere; }
+.ticket-files:empty, .ticket-form > [role=status]:empty { display: none; }
+.ticket-images { display: flex; flex-wrap: wrap; gap: .6rem; margin-block-start: .6rem; }
+.ticket-images a { display: grid; gap: .2rem; color: var(--cyan); font-size: .85rem; }
+.ticket-images img { width: 8rem; max-width: 100%; aspect-ratio: 4 / 3; object-fit: contain; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface); }
+.store-guide .faq-list { max-width: 55rem; }
+.store-guide .faq-list summary { font-size: 1rem; }
+.store-guide .faq-list p { font-size: .94rem; }
+.store-guide .faq-list a { color: var(--cyan); text-decoration: underline; text-underline-offset: .18em; }
+.store-guide .faq-search input { font: inherit; }
 @media (max-width: 520px) {
   .ticket-filters .ticket-field { flex-basis: 100%; }
   .ticket-toolbar { align-items: flex-start; }
