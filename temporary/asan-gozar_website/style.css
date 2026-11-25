@@ -63,3 +63,5 @@ button{cursor:pointer}
 #backToTop.visible{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}
 @media(max-width:700px){.calculator-card,.status-layout{grid-template-columns:1fr}.hero-status{align-items:flex-start;flex-wrap:wrap;margin-top:0}.hero-status a{margin-right:19px}.calculator-card{padding:18px}.calc-result strong{font-size:16px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+.nav .shop-link{color:var(--cyan);font-weight:800}

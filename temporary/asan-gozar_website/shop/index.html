@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="خرید، تمدید و مدیریت سرویس‌های آسان‌گذر با حساب تلگرام">
+  <meta name="referrer" content="no-referrer">
+  <title>فروشگاه آسان‌گذر</title>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./shop.css">
+  <script src="./shop.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="../"><span aria-hidden="true">AG</span> آسان‌گذر</a>
+    <nav aria-label="ناوبری">
+      <a href="../prices.html">تعرفه‌ها</a>
+      <a href="../faq.html">راهنما</a>
+      <a href="../contact.html">پشتیبانی</a>
+    </nav>
+  </header>
+  <main>
+    <div class="intro">
+      <h1>فروشگاه آسان‌گذر</h1>
+      <p>خرید، تمدید و مدیریت سرویس‌ها با همان حساب و کیف پول ربات فروش.</p>
+    </div>
+    <section id="app" class="workspace" aria-label="فروشگاه" aria-busy="true">
+      <p id="status" role="status"></p>
+      <section id="login" hidden aria-labelledby="login-title">
+        <h2 id="login-title">ورود با تلگرام</h2>
+        <p>لینک ورود را در ربات باز کن. ربات یک کد یک‌بارمصرف می‌دهد که باید همین‌جا وارد کنی.</p>
+        <button type="button" id="pair">دریافت لینک ورود</button>
+        <div id="pairing" hidden>
+          <p><a id="login-link" target="_blank" rel="noopener noreferrer">باز کردن ربات فروش</a></p>
+          <form id="verify">
+            <label for="code">کد ورود ربات</label>
+            <div class="form-row">
+              <input id="code" dir="ltr" maxlength="16" autocomplete="one-time-code" required>
+              <button type="submit">تأیید ورود</button>
+            </div>
+          </form>
+        </div>
+      </section>
+      <section id="account" hidden aria-label="حساب فروشگاه">
+        <div class="actions">
+          <button type="button" id="home" class="secondary">منوی فروشگاه</button>
+          <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
+          <button type="button" id="logout" class="secondary logout">خروج</button>
+        </div>
+        <div id="messages" aria-live="polite"></div>
+        <form id="reply" hidden>
+          <label for="reply-value" id="reply-label">پاسخ</label>
+          <div class="form-row">
+            <textarea id="reply-value" rows="3" maxlength="3500"></textarea>
+            <input id="reply-secret" type="password" aria-labelledby="reply-label" maxlength="3500" autocomplete="off" hidden>
+            <input id="reply-image" aria-labelledby="reply-label" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+            <button type="submit">ارسال</button>
+          </div>
+        </form>
+      </section>
+      <noscript><p>برای استفاده از فروشگاه، جاوااسکریپت را فعال کن.</p></noscript>
+    </section>
+    <footer><a href="../">وب‌سایت آسان‌گذر</a></footer>
+  </main>
+</body>
+</html>
