@@ -31,6 +31,20 @@ SERVICE = Path('/etc/systemd/system/asan-gozar-store.service')
 INCLUDE = f'include {SNIPPET};'
 REDIRECT = f'if ($host = {WWW}) {{ return 308 https://{DOMAIN}$request_uri; }}'
 TOKEN = re.compile(r'''#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\$\{[^}]+\}|[^\s{};#"']+|[{};]''')
+USERNAME = re.compile(r'[a-z][a-z0-9_]{2,31}')
+
+
+def owner_username():
+    with open('/dev/tty', 'r', encoding='utf-8') as terminal:
+        while True:
+            print('Choose store owner username (3–32 characters, letters, digits or underscores, starts with a letter): ', end='', flush=True)
+            value = terminal.readline()
+            if not value:
+                raise ValueError('No username was entered.')
+            username = value.strip().lower()
+            if USERNAME.fullmatch(username):
+                return username
+            print('Invalid username. Use Latin letters, digits or underscores.')
 
 
 def run(*args, **kwargs):
@@ -111,8 +125,8 @@ def vhost_plan(files):
     root = Path(roots[0]).resolve()
     if not (root / 'index.html').is_file() or root in [Path('/'), Path('/var'), Path('/var/www'), Path('/var/lib')]:
         raise ValueError(f'Existing site index not found in expected root: {root}')
-    if any(part.startswith('/shop') for loc in b['locations'] for part in loc):
-        raise ValueError('An existing inline /shop location would conflict with the installer.')
+    if any(part.startswith('/shop') or part == '/index.html' for loc in b['locations'] for part in loc):
+        raise ValueError('An existing inline /shop or /index.html location would conflict with the installer.')
     edits = {}
     additions = [(apex, INCLUDE), (www, REDIRECT)]
     if add_alias:
@@ -205,6 +219,8 @@ def main(archive):
             bundle.extractall(work, filter='data')
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
+        if not all(path.is_file() for path in (source / 'package-lock.json', public / 'index.html', public / 'store.js', public / 'store.css')):
+            raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
             raise ValueError('Unexpected symbolic link in the installation paths.')
         for asset in public.rglob('*'):
@@ -212,17 +228,21 @@ def main(archive):
             if destination.is_symlink():
                 raise ValueError(f'Refusing linked site destination: {destination}')
         database = DATA / 'store.sqlite'
-        prompt = not database.exists()
-        if not prompt:
+        owner = None
+        if database.exists():
             db = sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)
             try:
-                prompt = not db.execute('SELECT 1 FROM store_accounts WHERE owner=1 LIMIT 1').fetchone()
+                owner = db.execute('SELECT username FROM store_accounts WHERE owner=1 ORDER BY id LIMIT 1').fetchone()
             finally:
                 db.close()
+        prompt = owner is None
         if prompt:
+            username = owner_username()
             password = getpass.getpass('Choose store owner password (at least 14 characters): ')
-            if password != getpass.getpass('Repeat store owner password: ') or len(password) < 14 or len(password.encode()) > 256:
+            if password != getpass.getpass('Repeat store owner password: ') or len(password) < 14 or len(password.encode()) > 256 or any(c in password for c in '\x00\r\n'):
                 raise ValueError('Passwords did not match or expected length was not met.')
+        else:
+            username = owner[0]
         node, npm = node_tools(work)
         run(str(node), str(npm), 'ci', '--omit=dev', '--ignore-scripts', cwd=source)
         try:
@@ -244,7 +264,7 @@ def main(archive):
             if not item.is_symlink():
                 item.chmod(0o755 if item.is_dir() else 0o644)
         if prompt:
-            run('runuser', '-u', USER, '--', str(node), str(APP / 'account.mjs'), 'owner', 'owner', 'مدیر فروشگاه',
+            run('runuser', '-u', USER, '--', str(node), str(APP / 'account.mjs'), 'owner', username, 'مدیر فروشگاه',
                 input=password + '\n', text=True)
         unit = (source / 'asan-gozar-store.service').read_text()
         unit = unit.replace('ExecStart=/usr/bin/node ', f'ExecStart={node} ').replace(f'Group={USER}', f'Group={group}')
@@ -281,7 +301,7 @@ def main(archive):
             else:
                 SNIPPET.write_bytes(old_snippet)
             raise
-    print(f'Installed. Store: https://{DOMAIN}/shop/' + ('  |  Admin username: owner' if prompt else ''))
+    print(f'Installed. Store: https://{DOMAIN}/  |  Admin username: {username}')
     print(f'Check: curl -fsS https://{DOMAIN}/shop/api/state')
 
 

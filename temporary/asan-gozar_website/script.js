@@ -16,7 +16,7 @@
   } else if (accountLink) {
     window.addEventListener('pageshow', async () => {
       try {
-        const response = await fetch(new URL('shop/api/session', document.baseURI), { cache: 'no-store' });
+        const response = await fetch('/shop/api/session', { cache: 'no-store' });
         syncAccount(response.ok && (await response.json()).signedIn === true);
       } catch { syncAccount(false); }
     });
@@ -29,7 +29,7 @@
   const syncTheme = () => {
     if (!themeButton) return;
     const light = body.classList.contains('light');
-    themeButton.textContent = light ? '☾' : '☼';
+    themeButton.textContent = light ? 'تیره' : 'روشن';
     themeButton.setAttribute('aria-pressed', String(light));
     themeButton.setAttribute('aria-label', light ? 'فعال‌کردن پوسته تیره' : 'فعال‌کردن پوسته روشن');
   };
@@ -60,24 +60,6 @@
     closeMenu();
     menuButton?.focus();
   });
-
-  // محاسبه‌گر تعرفه‌های عادی
-  const service = $('calcService'), volume = $('calcVolume'), total = $('calcTotal');
-  const format = n => new Intl.NumberFormat('fa-IR').format(n) + ' تومان';
-  const calculate = () => {
-    if (!service || !volume || !total) return;
-    const localizedDigits = '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
-    const digits = volume.value.trim().replace(/[۰-۹٠-٩]/g, digit => String(localizedDigits.indexOf(digit) % 10));
-    const amount = Number(digits);
-    if (!/^\d+$/.test(digits) || !Number.isInteger(amount) || amount < 1 || amount > 100000) {
-      total.textContent = 'حجم را بین ۱ تا ۱۰۰٬۰۰۰ وارد کن';
-      return;
-    }
-    total.textContent = format(amount * Number(service.value));
-  };
-  service?.addEventListener('change', calculate);
-  volume?.addEventListener('input', calculate);
-  calculate();
 
   // جست‌وجوی پرسش‌های متداول
   const faqSearch = $('faqSearch'), faqCount = $('faqCount');
