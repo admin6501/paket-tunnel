@@ -67,3 +67,6 @@ button{cursor:pointer}
 .nav .shop-link{color:var(--cyan);font-weight:800}
 
 @media (min-width:651px) and (max-width:1050px){.top .nav{flex-wrap:wrap;justify-content:center;column-gap:12px;row-gap:4px;margin-inline:12px}}
+
+.theme, .menu { width: auto; min-width: 2.75rem; padding-inline: .55rem; font-size: .75rem; }
+.float-actions a, .float-actions button { width: auto; min-width: 3rem; padding-inline: .45rem; font-size: .7rem; }

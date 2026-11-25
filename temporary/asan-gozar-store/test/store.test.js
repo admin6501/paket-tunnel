@@ -69,6 +69,53 @@ function browser(env, ip) {
 const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
 const image = Buffer.from(testJPEG).toString('base64');
 
+test('public catalogue reflects the price set in the admin panel', async t => {
+  const { sqlite, env } = await fixture(t);
+  sqlite.exec(`INSERT INTO store_categories(id,name,group_ids) VALUES(1,'Standard','[1]');
+    INSERT INTO store_categories(id,name,group_ids,active) VALUES(2,'Hidden','[2]',0);
+    INSERT INTO plans(key,gb,price,sort) VALUES('public10',10,70000,1),('private20',20,80000,2);
+    INSERT INTO store_plan_specs(plan_key,category_id,days) VALUES('public10',1,30),('private20',2,60);`);
+  const guest = browser(env, '192.0.2.80');
+  const admin = browser(env, '192.0.2.81');
+  const catalogue = await guest.request('catalog');
+  assert.equal(catalogue.status, 200);
+  assert.deepEqual(catalogue.data.plans, [{ categoryId: 1, category: 'Standard', gb: 10, price: 70000, days: 30 }]);
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  await admin.init();
+  await admin.press('admin:root');
+  await admin.press('admin:plans');
+  await admin.press('admin:plan:public10');
+  await admin.press('admin:price:public10');
+  await admin.act({ kind: 'text', text: '92000' });
+  assert.deepEqual((await guest.request('catalog')).data.plans, [{ ...catalogue.data.plans[0], price: 92000 }]);
+});
+
+test('password rotation verifies the administrator and invalidates the existing session', async t => {
+  const { sqlite, env, owner } = await fixture(t);
+  const guest = browser(env, '192.0.2.82');
+  const admin = browser(env, '192.0.2.83');
+  const replacement = 'another-unique-long-test-password';
+  const update = { currentPassword: password, newPassword: replacement };
+  assert.equal((await guest.request('password', update)).status, 401);
+  assert.equal((await guest.request('register', { name: 'Customer', username: 'buyer', password })).status, 200);
+  assert.equal((await guest.request('password', update)).status, 403);
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  assert.equal((await admin.request('state')).data.admin, true);
+  assert.equal((await admin.request('password', update, 'https://other.example')).status, 403);
+  assert.equal((await admin.request('password', { ...update, currentPassword: 'wrong-but-long-password' })).status, 403);
+  assert.equal((await admin.request('password', { ...update, newPassword: 'too-short' })).status, 400);
+  const expire = sqlite.prepare('UPDATE web_shop_sessions SET busy_until=? WHERE user_id=?');
+  expire.run(Date.now() + 60_000, owner.id);
+  assert.equal((await admin.request('password', update)).status, 409);
+  expire.run(0, owner.id);
+  assert.deepEqual(await admin.request('password', update), { status: 200, data: { signedIn: false } });
+  assert.equal((await admin.request('state')).data.signedIn, false);
+  assert.ok(sqlite.prepare('SELECT expires_at FROM web_shop_sessions WHERE user_id=?').get(owner.id).expires_at <= Date.now());
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 401);
+  assert.equal((await admin.request('login', { username: 'owner', password: replacement })).status, 200);
+  assert.equal((await admin.request('state')).data.admin, true);
+});
+
 test('standalone signup, local admin role, session rotation and private support inbox', async t => {
   const { sqlite, env } = await fixture(t);
   t.mock.method(globalThis, 'fetch', async () => { throw Error('No outbound fetch expected'); });

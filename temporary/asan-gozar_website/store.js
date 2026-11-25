@@ -1,11 +1,15 @@
 const get = id => document.getElementById(id);
 const app = get('app');
-const base = new URL('./api/', location.href);
+const base = new URL('/shop/api/', location.origin);
 const status = get('status');
 const messages = get('messages');
 const reply = get('reply');
 const formats = new Set(['B','STRONG','I','EM','U','S','CODE','PRE','BR','A','BLOCKQUOTE']);
 const rtlDigits = '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
+const emoji = /\p{Emoji_Presentation}|\p{Extended_Pictographic}|[\uFE0E\uFE0F\u200D\u20E3\u{E0020}-\u{E007F}]/gu;
+const textOnly = value => value.replace(emoji, '');
+const configLinks = new WeakMap();
+const number = new Intl.NumberFormat('fa-IR');
 let state = { signedIn: false, messages: [], revision: 0 };
 let busy = false;
 let registering = false;
@@ -43,7 +47,7 @@ function safeURL(value) {
 function link(text, href) {
   const anchor = document.createElement('a');
   anchor.href = href;
-  anchor.textContent = text;
+  anchor.textContent = textOnly(text).trim();
   anchor.target = '_blank';
   anchor.rel = 'noopener noreferrer';
   return anchor;
@@ -54,7 +58,7 @@ function renderHTML(content, target) {
   template.innerHTML = content;
   const append = (node, parent) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      parent.append(document.createTextNode(node.textContent));
+      parent.append(document.createTextNode(textOnly(node.textContent)));
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE || ['SCRIPT','STYLE','IFRAME','SVG','MATH'].includes(node.tagName)) return;
@@ -66,7 +70,13 @@ function renderHTML(content, target) {
     const element = node.tagName === 'A'
       ? (href ? link('', href) : document.createElement('span'))
       : document.createElement(node.tagName.toLowerCase());
-    for (const child of node.childNodes) append(child, element);
+    const code = node.tagName === 'CODE' && node.textContent.trim();
+    if (code && /^\w[\w-]*:\/\//.test(code)) {
+      configLinks.set(element, code);
+      element.textContent = code.replace(emoji, character => encodeURIComponent(character));
+    } else {
+      for (const child of node.childNodes) append(child, element);
+    }
     parent.append(element);
   };
   for (const child of template.content.childNodes) append(child, target);
@@ -77,6 +87,8 @@ function show(newState) {
   document.dispatchEvent(new CustomEvent('shop:session', { detail: { signedIn: state.signedIn } }));
   get('login').hidden = state.signedIn;
   get('account').hidden = !state.signedIn;
+  get('password-open').hidden = !state.admin;
+  closePasswordForm();
   if (!state.signedIn) {
     messages.replaceChildren();
     reply.reset();
@@ -101,14 +113,14 @@ function show(newState) {
       card.append(photo);
     }
     for (const code of content.querySelectorAll('code')) {
-      if (!/^\w[\w-]*:\/\//.test(code.textContent.trim())) continue;
+      if (!configLinks.has(code)) continue;
       const copy = document.createElement('button');
       copy.type = 'button';
       copy.textContent = 'کپی لینک';
       copy.className = 'secondary';
       copy.addEventListener('click', async () => {
         try {
-          await navigator.clipboard.writeText(code.textContent.trim());
+          await navigator.clipboard.writeText(configLinks.get(code));
           announce('لینک کپی شد.');
         } catch { announce('لینک را انتخاب و کپی کنید.', true); }
       });
@@ -126,10 +138,10 @@ function show(newState) {
         } else if (option.action) {
           const button = document.createElement('button');
           button.type = 'button';
-          button.textContent = option.text;
+          button.textContent = textOnly(option.text).trim();
           button.addEventListener('click', () => {
             if (/^(wallet:pay:|approve_|topup:(approve|reject):|loc:go:)/.test(option.action) &&
-                !window.confirm(option.text + '؟')) return;
+                !window.confirm(button.textContent + '؟')) return;
             void perform(() => action({ kind: 'button', action: option.action }));
           });
           buttons.append(button);
@@ -162,8 +174,8 @@ async function perform(task) {
   setBusy(true);
   announce('در حال بررسی…');
   try {
-    await task();
-    announce();
+    const message = await task();
+    announce(typeof message === 'string' ? message : '');
   } catch (error) {
     if (error.status === 401) show({ signedIn: false });
     announce(error.name === 'TimeoutError'
@@ -176,12 +188,80 @@ async function perform(task) {
 
 async function action(body) {
   show(await api('action', { ...body, revision: state.revision }));
+  if (state.admin) void loadCatalog();
 }
 
 async function refresh() {
   show(await api('state'));
   if (state.signedIn && !state.messages.length) await action({ kind: 'home' });
 }
+
+let catalogRequest = 0;
+async function loadCatalog() {
+  const request = ++catalogRequest;
+  const target = get('catalog-plans');
+  const notice = get('catalog-status');
+  try {
+    const { plans } = await api('catalog');
+    if (request !== catalogRequest) return;
+    const categories = new Map();
+    for (const plan of plans) {
+      if (!categories.has(plan.categoryId)) {
+        const section = document.createElement('section');
+        section.className = 'plan-category';
+        const title = document.createElement('h3');
+        title.textContent = textOnly(plan.category).trim() || 'بسته‌ها';
+        const grid = document.createElement('ul');
+        grid.className = 'plan-grid';
+        section.append(title, grid);
+        categories.set(plan.categoryId, { section, grid });
+      }
+      const card = document.createElement('li');
+      const volume = document.createElement('strong');
+      volume.textContent = `${number.format(plan.gb)} گیگابایت`;
+      const duration = document.createElement('span');
+      duration.textContent = `${number.format(plan.days)} روز اعتبار`;
+      const price = document.createElement('b');
+      price.textContent = `${number.format(plan.price)} تومان`;
+      card.append(volume, duration, price);
+      categories.get(plan.categoryId).grid.append(card);
+    }
+    target.replaceChildren(...Array.from(categories.values(), category => category.section));
+    notice.textContent = plans.length ? '' : 'در حال حاضر بسته‌ای برای خرید فعال نیست.';
+  } catch {
+    if (request !== catalogRequest) return;
+    target.replaceChildren();
+    notice.textContent = 'تعرفه‌ها در دسترس نیستند. صفحه را دوباره بارگذاری کنید.';
+  }
+}
+
+function closePasswordForm() {
+  get('password-change').hidden = true;
+  get('password-open').setAttribute('aria-expanded', 'false');
+  get('password-form').reset();
+}
+
+get('password-open').addEventListener('click', () => {
+  get('password-change').hidden = false;
+  get('password-open').setAttribute('aria-expanded', 'true');
+  get('current-password').focus();
+});
+get('password-cancel').addEventListener('click', () => {
+  closePasswordForm();
+  get('password-open').focus();
+});
+get('password-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    const currentPassword = get('current-password').value;
+    const newPassword = get('new-password').value;
+    if (newPassword !== get('repeat-password').value) throw new Error('رمز جدید و تکرار آن یکسان نیستند.');
+    try {
+      show(await api('password', { currentPassword, newPassword }));
+      return 'رمز عبور تغییر کرد. با رمز جدید وارد شوید.';
+    } finally { get('current-password').value = ''; }
+  });
+});
 
 async function imageData(file) {
   if (!file || file.size > 10_000_000 || !['image/jpeg','image/png','image/webp'].includes(file.type)) {
@@ -228,6 +308,7 @@ get('auth').addEventListener('submit', event => {
 });
 
 async function loadInbox(more = false) {
+  closePasswordForm();
   const { messages: entries, next } = await api(more ? `inbox?before=${nextMessage}` : 'inbox');
   get('inbox').hidden = false;
   messages.hidden = true;
@@ -288,3 +369,4 @@ reply.addEventListener('submit', event => {
   });
 });
 void perform(refresh);
+void loadCatalog();

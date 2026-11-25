@@ -78,12 +78,41 @@ function publicState(session) {
   const input = ['panel_pass','mp_pass','mpedit_pass'].includes(admin_ui_step) ? 'password'
     : (admin_ui_step || admin_step || ['purchase_name_choice','service_name','test_name','wallet_amount','invite_code_input','coupon_code','support'].includes(step)) ? 'text'
     : ['receipt','wallet_receipt'].includes(step) ? 'image' : null;
-  return { signedIn: true, revision: session.revision, messages: JSON.parse(session.view_json), input };
+  return { signedIn: true, admin: Boolean(session.admin_access), revision: session.revision, messages: JSON.parse(session.view_json), input };
 }
 
 async function isAdmin(env, uid) {
   return Boolean(await first(env, 'SELECT 1 FROM store_accounts WHERE owner=1 AND id=?', uid)) ||
     Boolean(await first(env, 'SELECT 1 FROM admins WHERE user_id=?', uid));
+}
+
+async function changePassword(request, env, session) {
+  if (await limited(env, `password:${session.user_id}`, 5)) {
+    return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
+  }
+  const body = await readBody(request);
+  if (!validPassword(body?.currentPassword) || !validPassword(body?.newPassword) || body.currentPassword === body.newPassword) {
+    return json({ error: 'رمز جدید باید با رمز فعلی متفاوت و حداقل ۱۴ نویسه باشد.' }, 400);
+  }
+  const account = await first(env, 'SELECT salt,password_hash FROM store_accounts WHERE id=?', session.user_id);
+  let replacement;
+  try {
+    if (!(await checkPassword(body.currentPassword, account))) return json({ error: 'رمز فعلی درست نیست.' }, 403);
+    replacement = await hashPassword(body.newPassword);
+  } catch {
+    return json({ error: 'تغییر رمز موقتاً امکان‌پذیر نیست. دوباره تلاش کنید.' }, 503);
+  }
+  const now = Date.now();
+  const [saved] = await env.DB.batch([
+    env.DB.prepare(`UPDATE store_accounts SET salt=?,password_hash=? WHERE id=? AND salt=?
+      AND EXISTS(SELECT 1 FROM web_shop_sessions WHERE token=? AND user_id=store_accounts.id AND expires_at>? AND busy_until<=?)`)
+      .bind(replacement.salt, replacement.password_hash, session.user_id, account.salt, session.token, now, now),
+    env.DB.prepare(`UPDATE web_shop_sessions SET expires_at=? WHERE user_id=?
+      AND EXISTS(SELECT 1 FROM store_accounts WHERE id=web_shop_sessions.user_id AND salt=?)`)
+      .bind(now, session.user_id, replacement.salt),
+  ]);
+  if (!saved.meta.changes) return json({ error: 'وضعیت حساب تغییر کرده است. دوباره تلاش کنید.' }, 409);
+  return json({ signedIn: false }, 200, [cookie(SESSION_COOKIE, '', 0)]);
 }
 
 export async function webShopReview(env, uid, action) {
@@ -144,6 +173,13 @@ export async function webShopRequest(request, env, update) {
   const now = Date.now();
   if (await limited(env, `request:${ip}`, 90)) return json({ error: 'لطفاً کمی صبر کنید.' }, 429);
 
+  if (route === 'catalog' && request.method === 'GET') {
+    const plans = await all(env, `SELECT c.id AS categoryId,c.name AS category,p.gb,p.price,s.days
+      FROM plans p JOIN store_plan_specs s ON s.plan_key=p.key JOIN store_categories c ON c.id=s.category_id
+      WHERE c.active=1 ORDER BY c.id,p.sort,p.price,p.key`);
+    return json({ plans });
+  }
+
   if (['register','login'].includes(route) && request.method === 'POST') {
     if (await limited(env, `login:${ip}`, 8)) return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
     const body = await readBody(request);
@@ -202,6 +238,9 @@ export async function webShopRequest(request, env, update) {
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
+  if (route === 'password' && request.method === 'POST') {
+    return admin ? changePassword(request, env, session) : json({ error: 'دسترسی ندارید.' }, 403);
+  }
   if (route === 'inbox' && request.method === 'GET') {
     const before = Number(url.searchParams.get('before') || Number.MAX_SAFE_INTEGER);
     if (!Number.isSafeInteger(before) || before <= 0) return json({ error: 'صفحه معتبر نیست.' }, 400);
@@ -239,7 +278,7 @@ export async function webShopRequest(request, env, update) {
     (body.kind === 'text' && typed && ['text','password'].includes(input)) || (image && input === 'image');
   if (!valid) return json({ error: 'ورودی یا گزینه معتبر نیست.' }, 400);
   const locked = await run(env, `UPDATE web_shop_sessions SET busy_until=?,revision=revision+1
-    WHERE token=? AND revision=? AND busy_until<=?`, now + 5 * 60_000, sessionKey, session.revision, now);
+    WHERE token=? AND revision=? AND busy_until<=? AND expires_at>?`, now + 5 * 60_000, sessionKey, session.revision, now, now);
   if (!locked.meta.changes) return json({ error: 'یک درخواست در حال اجراست.' }, 409);
 
   const account = await first(env, 'SELECT id,username,display_name FROM store_accounts WHERE id=?', session.user_id);
