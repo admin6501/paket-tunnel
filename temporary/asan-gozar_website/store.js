@@ -99,6 +99,7 @@ function show(newState) {
   document.dispatchEvent(new CustomEvent('shop:session', { detail: { signedIn: state.signedIn } }));
   get('login').hidden = state.signedIn;
   get('account').hidden = !state.signedIn;
+  get('tickets-manage').hidden = !state.admin;
   tickets.close();
   closeAccountForms();
   if (!state.signedIn) {
@@ -235,7 +236,8 @@ async function refresh() {
   if (state.signedIn && !state.messages.length) await action({ kind: 'home' });
   if (state.signedIn && supportLink) {
     supportLink = false;
-    await openSupport(state.admin && supportParams.has('staffTicket'), Number.isSafeInteger(linkedTicket) && linkedTicket > 0 ? linkedTicket : null);
+    const adminQueue = state.admin && (supportParams.has('staffTicket') || supportParams.get('support') === 'manage');
+    await openSupport(adminQueue, Number.isSafeInteger(linkedTicket) && linkedTicket > 0 ? linkedTicket : null);
   }
 }
 
@@ -458,6 +460,7 @@ async function loadInbox(more = false) {
 
 get('inbox-open').addEventListener('click', () => { void perform(loadInbox); });
 get('tickets-open').addEventListener('click', () => { void perform(() => openSupport(false)); });
+get('tickets-manage').addEventListener('click', () => { void perform(() => openSupport(true)); });
 get('inbox-more').addEventListener('click', () => { void perform(() => loadInbox(true)); });
 get('inbox-read').addEventListener('click', () => {
   void perform(async () => {
