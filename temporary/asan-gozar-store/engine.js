@@ -367,7 +367,7 @@ async function groupCredentials(env, groupIds=env.cfg.panel_group_ids, anchorId=
 
 }
 
-async function panelCreate(env, { name, bytes, days, attemptKey, onDispatch, groupIds=env.cfg.panel_group_ids, anchorId=env.cfg.panel_inbound_id }) {
+async function panelCreate(env, { name, bytes, days, attemptKey, onDispatch, trialCategoryId, groupIds=env.cfg.panel_group_ids, anchorId=env.cfg.panel_inbound_id }) {
   assertPanelReady(env);
   if (!Number.isSafeInteger(bytes) || bytes <= 0 || !Number.isSafeInteger(days) || days <= 0 || !Number.isSafeInteger(Date.now() + days * DAY_MS)) throw new Error("حجم یا مدت بسته معتبر نیست");
   const credentials = await groupCredentials(env,groupIds,anchorId);
@@ -377,11 +377,18 @@ async function panelCreate(env, { name, bytes, days, attemptKey, onDispatch, gro
   if (["wg-c", "awg", "wireguard", "gre", "mtproto"].includes(credentials.anchorProtocol)) credentials.id = email;
   delete credentials.anchorProtocol;
   const inboundId = credentials.anchorId;
+  const memberIds = credentials.memberIds;
   delete credentials.anchorId;
   delete credentials.memberIds;
   if (attemptKey) {
     const identity=await currentPanelIdentity(env);
-    await env.DB.batch([env.DB.prepare("INSERT INTO provision_attempts(attempt_key,email,sub_id,inbound_id,created_at) VALUES(?,?,?,?,?)").bind(attemptKey,email,subId,inboundId,now()),env.DB.prepare("INSERT INTO settings(key,value) VALUES(?,?)").bind(`attempt_panel:${attemptKey}`,identity)]);
+    const statements = [
+      env.DB.prepare('INSERT INTO provision_attempts(attempt_key,email,sub_id,inbound_id,created_at) VALUES(?,?,?,?,?)').bind(attemptKey,email,subId,inboundId,now()),
+      env.DB.prepare('INSERT INTO settings(key,value) VALUES(?,?)').bind(`attempt_panel:${attemptKey}`,identity),
+    ];
+    if (trialCategoryId) statements.push(env.DB.prepare('INSERT INTO settings(key,value) VALUES(?,?)')
+      .bind(`trial_attempt:${attemptKey}`, JSON.stringify({ categoryId: trialCategoryId, memberIds, days })));
+    await env.DB.batch(statements);
   }
   const settings = JSON.stringify({
     clients: [{
@@ -394,9 +401,41 @@ async function panelCreate(env, { name, bytes, days, attemptKey, onDispatch, gro
   form.set("id", String(inboundId));
   for (const g of parseIds(groupIds)) form.append("groupIds", String(g));
   form.set("settings", settings);
-  const j = await panelCall(env, "POST", "/panel/api/inbounds/addClient", form, onDispatch);
-  if (!j.success) throw new Error("پنل رد کرد: " + (j.msg || JSON.stringify(j)));
+  if (trialCategoryId) await submitTrial(env, form, { email, subId, memberIds }, onDispatch);
+  else {
+    const result = await panelCall(env, 'POST', '/panel/api/inbounds/addClient', form, onDispatch);
+    if (!result.success) throw new Error('پنل رد کرد: ' + (result.msg || JSON.stringify(result)));
+  }
   return { email, inboundId, subId, link: subLink(env, subId), bytes };
+}
+
+function hasTrialMemberships(account, expected) {
+  if (!Array.isArray(account?.memberships) || !Array.isArray(expected) || !expected.length) return false;
+  const actual = new Set(account.memberships.map(member => Number(member.inboundId)));
+  return actual.size === expected.length && expected.every(id => actual.has(id));
+}
+
+async function submitTrial(env, form, { email, subId, memberIds }, onDispatch) {
+  for (let retry = 0; ; retry++) {
+    let sent = false;
+    let reason;
+    let locked = false;
+    try {
+      const response = await panelCall(env, 'POST', '/panel/api/inbounds/addClient', form, () => { sent = true; onDispatch?.(); });
+      if (response.success) return;
+      const message = response.msg || JSON.stringify(response);
+      locked = /\bdatabase (?:table )?is locked\b/i.test(message);
+      reason = new Error('پنل رد کرد: ' + message);
+    } catch (error) { reason = error; }
+    if (!sent) throw reason;
+    const existing = await panelAccount(env, email).catch(() => { throw reason; });
+    if (existing) {
+      if (existing.subId === subId && hasTrialMemberships(existing, memberIds)) return;
+      throw new Error('حسابی با این نام در پنل دیده شد. شناسه و ورودی‌های سرویس را پیش از ثبت بررسی کنید.');
+    }
+    if (!locked || retry === 2) throw reason;
+    await new Promise(resolve => setTimeout(resolve, 150 * (retry + 1)));
+  }
 }
 
 // Prepare the exact identity before dispatch so a lost reply can be reconciled
@@ -704,6 +743,42 @@ async function insertService(env, o) {
   if(o.panelIdentity)await run(env,"INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",`service_panel:${r.meta.last_row_id}`,o.panelIdentity);
   if(o.categoryId)await run(env,"INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",`service_category:${r.meta.last_row_id}`,String(o.categoryId));
   return r.meta.last_row_id;
+}
+
+async function saveTrial(env, uid, claim, trial) {
+  const { email, subId, inboundId, bytes, link, identity, categoryId, duration } = trial;
+  const pending = 'EXISTS(SELECT 1 FROM test_claims WHERE user_id=? AND created_at=?)';
+  const match = 'user_id=? AND panel_email=? AND sub_id=?';
+  const checks = [uid, email, subId, uid, claim];
+  const statements = [
+    env.DB.prepare(`INSERT INTO services(user_id,name,volume,duration,sub_link,created_at,panel_email,inbound_id,sub_id,volume_bytes)
+      SELECT ?,?,?,?,?,?,?,?,?,? WHERE ${pending} AND NOT EXISTS(SELECT 1 FROM services WHERE sub_id=?)`)
+      .bind(uid, email, `${bytes / MB} مگابایت`, duration, link, now(), email, inboundId, subId, bytes, uid, claim, subId),
+    env.DB.prepare(`INSERT INTO settings(key,value) SELECT 'service_panel:'||id,? FROM services WHERE ${match} AND ${pending}
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(identity, ...checks),
+  ];
+  if (categoryId) statements.push(env.DB.prepare(`INSERT INTO settings(key,value) SELECT 'service_category:'||id,? FROM services WHERE ${match} AND ${pending}
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(String(categoryId), ...checks));
+  statements.push(env.DB.prepare(`UPDATE test_claims SET created_at=? WHERE user_id=? AND created_at=?
+    AND EXISTS(SELECT 1 FROM services WHERE ${match})`).bind(`done|${now()}`, uid, claim, uid, email, subId));
+  const applied = await env.DB.batch(statements);
+  return Boolean(applied.at(-1).meta.changes);
+}
+
+async function readTrialReview(env, uid) {
+  const claim = await first(env, "SELECT created_at FROM test_claims WHERE user_id=? AND created_at LIKE 'review|%'", uid);
+  if (!claim) return null;
+  const attempt = await first(env, `SELECT p.*,identity.value AS identity,details.value AS details FROM provision_attempts p
+    LEFT JOIN settings identity ON identity.key='attempt_panel:'||p.attempt_key
+    LEFT JOIN settings details ON details.key='trial_attempt:'||p.attempt_key
+    WHERE p.attempt_key LIKE ? ORDER BY p.rowid DESC LIMIT 1`, `test:${uid}:%`);
+  if (!attempt?.identity) throw new Error('اطلاعات پنل برای این تلاش قدیمی کامل نیست.');
+  const panel = await panelForIdentity(env, attempt.identity);
+  const account = await panelAccount(panel, attempt.email);
+  const details = JSON.parse(attempt.details ?? 'null');
+  const suffix = attempt.attempt_key.split(':').at(-1);
+  const saved = await first(env, 'SELECT id,user_id FROM services WHERE sub_id=?', attempt.sub_id);
+  return { claim: claim.created_at, attempt, account, details, panel, suffix, saved };
 }
 
 // ---------------------------------------------------------- رندر
@@ -1158,8 +1233,11 @@ async function handleAdminCommand(c, msg) {
   }
 
   if (cmd === "/resettest" && a.length === 1 && /^\d+$/.test(a[0])) {
-    await run(env, "DELETE FROM test_claims WHERE user_id=?", Number(a[0]));
-    return reply("✅ کاربر دوباره می‌تواند سرویس تست بگیرد.");
+    const uid = Number(a[0]);
+    await run(env, "DELETE FROM test_claims WHERE user_id=? AND COALESCE(created_at,'') NOT LIKE 'processing|%' AND COALESCE(created_at,'') NOT LIKE 'review|%'", uid);
+    const pending = await first(env, 'SELECT 1 FROM test_claims WHERE user_id=?', uid);
+    return pending ? reply('درخواست تست قبلی در حال پردازش یا بررسی است. از صفحهٔ همان کاربر نتیجه را بررسی کنید.')
+      : reply('✅ کاربر دوباره می‌تواند سرویس تست بگیرد.');
   }
 
   if (cmd === "/stats") {
@@ -1214,6 +1292,7 @@ const adminHomeKb = () => kb([
   [btn("🎁 تنظیم هدیه دعوت", "admin:setting:referral_discount"),btn("🎟 مدیریت کد تخفیف", "admin:coupons:0")],
   [btn("📲 مدیریت اپلیکیشن‌ها", "admin:apps")],
   [btn("🎁 مجوز دوباره تست", "admin:resettest"), btn("🔌 بررسی اتصال پنل", "admin:panelcheck")],
+  [btn('تست‌های نیازمند بررسی', 'admin:trials:0')],
   [btn("♻️ ریست تست همه", "admin:reset_all_tests")],
   [btn("🏠 منوی مشتری", "main_menu")],
 ]);
@@ -1699,12 +1778,71 @@ async function handleAdminUICallback(c, cq, answer) {
     const u=await storeUserIdentity(env,target);
     const balance=await walletBalance(env,target); const name=esc(u?.first_name || "نام در دسترس نیست"), username=esc(u?.username ? "@"+String(u.username).replace(/^@/,"") : "ثبت نشده یا در دسترس نیست");
     const rows=[[btn("📦 سرویس‌ها و وضعیت",`admin:us:${target}:0`),btn("🧾 همه سفارش‌ها",`admin:uo:${target}:0`)],[btn("💰 کیف پول",`admin:wallet_view:${target}`),btn("📜 تراکنش‌ها",`admin:ut:${target}:0`)],[btn("✉️ پیام خصوصی",`admin:message_user:${target}`)]];
+    if (await first(env, "SELECT 1 FROM test_claims WHERE user_id=? AND created_at LIKE 'review|%'", target)) {
+      rows.push([btn('بررسی درخواست تست', `admin:trial:${target}`)]);
+    }
     if(!env.admins.has(target)) rows.push([btn(u?.blocked ? "✅ رفع مسدودی" : "⛔ مسدود کردن",`admin:ub:${target}:${u?.blocked ? 0 : 1}`)]);
     if(env.WEB_STATE && !env.admins.has(target) && await first(env,'SELECT 1 FROM store_accounts WHERE id=?',target)) {
       rows.push([btn('بازنشانی رمز کاربر',`web:reset_password:${target}`)]);
     }
     rows.push([btn("🔙 کاربران","admin:users:0")]);
     return renderAdmin(`👤 <b>${name}</b>\nشناسه: <code>${target}</code>\nنام کاربری: ${username}${u.usernameFromOrder ? " (از سفارش قدیمی؛ ممکن است تغییر کرده باشد)" : ""}\nدسترسی فروشگاه: ${u?.blocked ? "مسدود" : "باز"}\nموجودی: ${toman(balance)}`,kb(rows));
+  }
+  if (/^admin:trials:\d{1,6}$/.test(d)) {
+    const page = Number(d.split(':')[2]);
+    const claims = await all(env, `SELECT t.user_id,a.username FROM test_claims t
+      LEFT JOIN store_accounts a ON a.id=t.user_id WHERE t.created_at LIKE 'review|%'
+      ORDER BY t.created_at DESC,t.user_id DESC LIMIT 11 OFFSET ?`, page * 10);
+    const buttons = claims.slice(0, 10).map(item => [btn(`${item.user_id}${item.username ? ` · @${item.username}` : ''}`, `admin:trial:${item.user_id}`)]);
+    const nav = [];
+    if (page) nav.push(btn('قبلی', `admin:trials:${page - 1}`));
+    if (claims.length > 10) nav.push(btn('بعدی', `admin:trials:${page + 1}`));
+    if (nav.length) buttons.push(nav);
+    return renderAdmin(claims.length ? 'تست‌های نیازمند بررسی' : 'درخواستی برای بررسی وجود ندارد.',
+      kb([...buttons, [btn('بازگشت', 'admin:root')]]));
+  }
+  const trialAction = /^admin:(trial|trial_save|trial_release):(\d+)(?::([a-f0-9]{16}))?$/.exec(d);
+  if (trialAction) {
+    const [, action, id, suffix] = trialAction;
+    if (!positiveId(id)) return answer('شناسهٔ کاربر معتبر نیست.', true);
+    const target = Number(id);
+    const back = `admin:user:${id}`;
+    let review;
+    try { review = await readTrialReview(env, target); }
+    catch (error) { return renderAdmin(`بررسی تست ممکن نشد. <code>${esc(error.message)}</code>`, adminBack(back)); }
+    if (!review || (action !== 'trial' && suffix !== review.suffix)) return renderAdmin('این درخواست قبلاً تغییر کرده است.', adminBack(back));
+    const { attempt, account, details, panel, saved } = review;
+    const members = details?.memberIds ?? [Number(attempt.inbound_id)];
+    const ready = account?.subId === attempt.sub_id &&
+      (details ? hasTrialMemberships(account, members) : account.memberships?.some(item => Number(item.inboundId) === members[0])) &&
+      Number.isSafeInteger(account.totalGB) && account.totalGB > 0 && (!saved || saved.user_id === target);
+    if (action === 'trial_save') {
+      if (!ready) return renderAdmin('حساب و ورودی‌های سرویس در پنل تأیید نشدند.', adminBack(back));
+      const days = details?.days || Math.ceil(Number(account.renewalDuration || 0) / DAY_MS);
+      const recorded = await saveTrial(env, target, review.claim, { email: attempt.email, subId: attempt.sub_id,
+        inboundId: attempt.inbound_id, bytes: account.totalGB, link: subLink(panel, attempt.sub_id), identity: attempt.identity,
+        categoryId: details?.categoryId, duration: days > 0 ? `${days} روزه` : 'سرویس تست' });
+      if (recorded) {
+        try { await sendMsg(env, target, 'سرویس تست شما تأیید شد. لینک اشتراک از «سرویس‌های من» در دسترس است.'); } catch {}
+      }
+      return renderAdmin(recorded ? 'سرویس موجود ثبت شد.' : 'درخواست قبلاً تغییر کرده است.', adminBack(back));
+    }
+    if (action === 'trial_release') {
+      if (account || saved) return renderAdmin('رکوردی برای این اشتراک پیدا شد. بررسی را از صفحهٔ کاربر ادامه دهید.', adminBack(back));
+      const released = await run(env, 'DELETE FROM test_claims WHERE user_id=? AND created_at=?', target, review.claim);
+      return renderAdmin(released.meta.changes ? 'کاربر دوباره می‌تواند درخواست تست بدهد.' : 'درخواست قبلاً تغییر کرده است.', adminBack(back));
+    }
+    const title = `درخواست تست <code>${id}</code>\nنام حساب در پنل: <code>${esc(attempt.email)}</code>`;
+    const buttons = [];
+    let detail;
+    if (ready) {
+      detail = details ? 'اشتراک و ورودی‌های مورد انتظار در پنل تأیید شدند.' : 'این تلاش قدیمی است. گروه‌های حساب را در پنل بررسی کنید و سپس سرویس موجود را ثبت کنید.';
+      buttons.push([btn('ثبت سرویس موجود', `admin:trial_save:${id}:${review.suffix}`)]);
+    } else if (!account && !saved) {
+      detail = 'حساب در جست‌وجوی اتصال فروشگاه دیده نشد. نام بالا را با دسترسی کامل در پنل بررسی کنید. اگر حسابی وجود ندارد، اجازهٔ درخواست دوباره بدهید.';
+      buttons.push([btn('تأیید نبود حساب و اجازهٔ تست دوباره', `admin:trial_release:${id}:${review.suffix}`)]);
+    } else detail = 'نتیجهٔ پنل با اطلاعات درخواست کامل مطابقت ندارد. اشتراک و گروه‌ها را در پنل بررسی کنید و به این صفحه برگردید.';
+    return renderAdmin(`${title}\n\n${detail}`, kb([...buttons, [btn('بازگشت', back)]]));
   }
   if (/^admin:ub:\d+:[01]$/.test(d)) {
     const [, ,id,blocked]=d.split(":"),target=Number(id);
@@ -2353,11 +2491,14 @@ async function onCallback(c, cq) {
     let dispatched = false, p;
     const mb = num(env, "test_mb"), days = num(env, "test_days"), label = `${mb} مگابایت`;
     try {
-      const target=await panelForIdentity(env,await assertCategory(env,cat));p = await panelCreate(target, { name: testName, bytes: mb * MB, days, groupIds:cat.group_ids,anchorId:0,attemptKey: `test:${uid}:${hex(8)}`, onDispatch: () => { dispatched = true; } });
-      await insertService(env, { ...p,panelIdentity:await currentPanelIdentity(target),categoryId:cat.id, user_id: uid, name: testName, volume: label, duration: `${days} روزه` });
-      await run(env, "UPDATE test_claims SET created_at=? WHERE user_id=? AND created_at=?", `done|${now()}`, uid, token);
+      const target = await panelForIdentity(env, await assertCategory(env, cat));
+      p = await panelCreate(target, { name: testName, bytes: mb * MB, days, groupIds: cat.group_ids, anchorId: 0,
+        attemptKey: `test:${uid}:${hex(8)}`, trialCategoryId: cat.id, onDispatch: () => { dispatched = true; } });
+      if (!await saveTrial(env, uid, token, { ...p, identity: await currentPanelIdentity(target), categoryId: cat.id, duration: `${days} روزه` })) {
+        throw new Error('ثبت سرویس تست در فروشگاه تأیید نشد.');
+      }
     } catch (e) {
-      if (dispatched) await run(env, "UPDATE test_claims SET created_at=? WHERE user_id=? AND created_at=?", `review|${now()}`, uid, token);
+      if (dispatched) await run(env, "UPDATE test_claims SET created_at=? WHERE user_id=? AND created_at=?", `review|${now()}|${hex(8)}`, uid, token);
       else await run(env, "DELETE FROM test_claims WHERE user_id=? AND created_at=?", uid, token);
       console.log("test error", e.message);
       for (const a of env.admins) { try { await sendMsg(env, a, `⚠️ درخواست تست <code>${uid}</code> ${dispatched ? "نیازمند بررسی نتیجه در پنل" : "پیش از ارسال به پنل متوقف"} شد: <code>${esc(e.message)}</code>`); } catch {} }

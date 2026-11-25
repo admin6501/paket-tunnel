@@ -7,7 +7,7 @@ import { webShopRequest } from '../shop-api.js';
 import { listenForWebShop } from '../http.mjs';
 import { deliverToInbox } from '../inbox.js';
 import { processMessageJobs } from '../messages.js';
-import { panelURL } from '../panel-config.js';
+import { panelAccountKey, panelURL } from '../panel-config.js';
 import { fileURLToPath } from 'node:url';
 import { loadStorePages, webStorePage } from '../site.mjs';
 import { createPushConfig, sendPendingPush } from '../push.mjs';
@@ -483,6 +483,92 @@ test('standalone signup, local admin role, session rotation and private inbox', 
   await replacement.init();
   sqlite.prepare('UPDATE store_profiles SET blocked=1 WHERE user_id=?').run(customerId);
   assert.equal((await replacement.request('inbox')).status,401);
+});
+
+test('trial retries reuse the same credentials and admins can recover held older and partially created trials', async t => {
+  const { sqlite, env } = await fixture(t);
+  sqlite.exec(`UPDATE settings SET value='1' WHERE key='test_enabled';
+    INSERT INTO settings(key,value) VALUES('test_category_id','1'),('sub_base_url','https://sub.example/sub/');
+    INSERT INTO store_categories(id,name,group_ids) VALUES(1,'Trial group','1');`);
+  const accounts = new Map();
+  const attempts = [];
+  let phase = 'retry';
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const target = new URL(url);
+    assert.equal(target.hostname, 'panel.example');
+    const path = target.pathname;
+    if (path === '/login') return Response.json({ success: true }, { headers: { 'set-cookie': 'vpn-ui=test' } });
+    if (path.endsWith('/groups')) return Response.json({ success: true, obj: [{ id: 1, inboundIds: [3, 4] }] });
+    if (path.endsWith('/assignable')) return Response.json({ success: true, obj: [{ inboundId: 3, protocol: 'vless' }, { inboundId: 4, protocol: 'vless' }] });
+    if (path.endsWith('/list')) {
+      const account = accounts.get(target.searchParams.get('search'));
+      return Response.json({ success: true, obj: { rows: account ? [account] : [], total: account ? 1 : 0 } });
+    }
+    if (path.endsWith('/addClient')) {
+      const form = new URLSearchParams(options.body);
+      const client = JSON.parse(form.get('settings')).clients[0];
+      attempts.push({ form: options.body, ...client });
+      if (phase === 'retry' && attempts.length === 1) return Response.json({ success: false, msg: 'Something went wrong (database is locked)' });
+      accounts.set(client.email, { ...client, memberships: (phase === 'retry' ? [3, 4] : [3]).map(inboundId => ({ inboundId })) });
+      if (phase === 'partial') return Response.json({ success: false, msg: 'Something went wrong (database is locked)' });
+      return Response.json({ success: true });
+    }
+    throw Error(`Unexpected panel call: ${path}`);
+  });
+  const create = async (handle, ip) => {
+    const customer = browser(env, ip);
+    assert.equal((await customer.request('register', { username: handle, name: 'Trial customer', password })).status, 200);
+    await customer.init();
+    await customer.press('test_service');
+    await customer.press('testcat:1:0');
+    await customer.press('testname:random');
+    return sqlite.prepare('SELECT id FROM store_accounts WHERE username=?').get(handle).id;
+  };
+  const first = await create('trial_retry', '192.0.2.152');
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].form, attempts[1].form);
+  assert.equal(sqlite.prepare('SELECT sub_id FROM services WHERE user_id=?').get(first).sub_id, attempts[0].subId);
+
+  phase = 'partial';
+  const second = await create('trial_partial', '192.0.2.153');
+  assert.equal(attempts.length, 3);
+  assert.match(sqlite.prepare('SELECT created_at FROM test_claims WHERE user_id=?').get(second).created_at, /^review\|/);
+  assert.equal(sqlite.prepare('SELECT 1 FROM services WHERE user_id=?').get(second), undefined);
+
+  const admin = browser(env, '192.0.2.154');
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  await admin.init();
+  const review = async id => {
+    await admin.act({ kind: 'home' });
+    await admin.press('admin:root');
+    await admin.press('admin:users:0');
+    await admin.press(`admin:user:${id}`);
+    await admin.press(`admin:trial:${id}`);
+  };
+  await review(second);
+  assert.ok(!admin.buttons().some(action => /^admin:trial_(save|release):/.test(action)));
+  accounts.get(attempts[2].email).memberships.push({ inboundId: 4 });
+  await admin.act({ kind: 'home' });
+  await admin.press('admin:root');
+  await admin.press('admin:trials:0');
+  await admin.press(`admin:trial:${second}`);
+  await admin.press(admin.buttons().find(action => action.startsWith('admin:trial_save:')));
+  const saved = sqlite.prepare('SELECT * FROM services WHERE user_id=?').all(second);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].sub_id, attempts[2].subId);
+  assert.match(sqlite.prepare('SELECT created_at FROM test_claims WHERE user_id=?').get(second).created_at, /^done\|/);
+  assert.equal(attempts.length, 3);
+
+  const unseen = browser(env, '192.0.2.155');
+  await unseen.request('register', { username: 'trial_missing', name: 'Legacy', password });
+  const legacy = sqlite.prepare("SELECT id FROM store_accounts WHERE username='trial_missing'").get().id;
+  const key = `test:${legacy}:0123456789abcdef`;
+  sqlite.prepare('INSERT INTO test_claims VALUES(?,?)').run(legacy, 'review|2026-11-25 17:00');
+  sqlite.prepare('INSERT INTO provision_attempts VALUES(?,?,?,?,?)').run(key, 'OldMissing', 'old-missing-sub', 3, '2026-11-25 17:00');
+  sqlite.prepare('INSERT INTO settings VALUES(?,?)').run(`attempt_panel:${key}`, await panelAccountKey(env.PANEL_URL, env.PANEL_USER));
+  await review(legacy);
+  await admin.press(`admin:trial_release:${legacy}:0123456789abcdef`);
+  assert.equal(sqlite.prepare('SELECT 1 FROM test_claims WHERE user_id=?').get(legacy), undefined);
 });
 
 test('card purchase and wallet top-up are reviewed in the web admin without an external messenger', async t => {
