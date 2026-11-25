@@ -3,6 +3,13 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const body = document.body;
+  window.addEventListener('pageshow', async event => {
+    if (!event.persisted) return;
+    try {
+      const response = await fetch('/shop/api/brand', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      if (response.ok && (await response.json()).name !== document.documentElement.dataset.storeBrand) location.reload();
+    } catch {}
+  });
   if (body.classList.contains('site-home')) {
     const destination = { '#app': '/account.html', '#tariffs': '/prices.html' }[location.hash];
     if (destination) { location.replace(destination); return; }

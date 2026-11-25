@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fa" dir="rtl">
+<html data-store-brand="آسان‌گذر" lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,19 +9,23 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>حساب کاربری | آسان‌گذر</title>
   <meta name="robots" content="noindex">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon.svg?v=5" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=4">
-  <link rel="stylesheet" href="/store.css?v=4">
-  <script src="/script.js?v=4" defer></script>
-  <script src="/store.js?v=4" defer></script>
+  <link rel="stylesheet" href="/style.css?v=5">
+  <link rel="stylesheet" href="/store.css?v=5">
+  <script src="/script.js?v=5" defer></script>
+  <script src="/store.js?v=5" defer></script>
+
+  <meta property="og:description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
+  <meta property="og:site_name" content="آسان‌گذر">
+  <meta property="og:title" content="حساب کاربری | آسان‌گذر">
 </head>
 <body class="account-page">
   <a class="skip-link" href="#main">رفتن به محتوای اصلی</a>
   <header class="top">
-    <a class="logo" href="/" aria-label="آسان‌گذر، خانه"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
+    <a class="logo" href="/" aria-label="آسان‌گذر، خانه"><span class="logo-mark" aria-hidden="true">آ</span><b>آسان‌گذر</b></a>
     <nav aria-label="ناوبری اصلی" class="nav" id="mainNav">
       <a href="/services.html">سرویس‌ها</a>
       <a href="/prices.html">فروشگاه و تعرفه‌ها</a>
@@ -139,7 +143,21 @@
           </div>
           <button type="button" id="backup-close" class="secondary">بازگشت به پنل</button>
         </section>
-        <section id="notice-editor" hidden aria-labelledby="notice-editor-title">
+        <section id="brand-editor" class="settings-editor" hidden aria-labelledby="brand-title">
+          <h2 id="brand-title">نام برند سایت</h2>
+          <form id="brand-form" class="auth-form">
+            <div>
+              <label for="brand-name">نام نمایشی برند</label>
+              <input id="brand-name" maxlength="60" dir="auto" required aria-describedby="brand-help">
+              <p id="brand-help">این نام در همهٔ صفحات فروشگاه و عنوان‌های سایت نمایش داده می‌شود.</p>
+            </div>
+            <div class="actions">
+              <button type="submit">ذخیرهٔ نام برند</button>
+              <button type="button" id="brand-cancel" class="secondary">بازگشت به تنظیمات</button>
+            </div>
+          </form>
+        </section>
+        <section id="notice-editor" class="settings-editor" hidden aria-labelledby="notice-editor-title">
           <h2 id="notice-editor-title">اطلاعیه بالای سایت</h2>
           <form id="notice-form" class="auth-form">
             <label for="notice-kind">نوع اطلاعیه</label>
@@ -152,6 +170,7 @@
             <input id="notice-heading" maxlength="100">
             <label for="notice-message">متن اطلاعیه</label>
             <textarea id="notice-message" maxlength="1500" rows="5"></textarea>
+            <p>برای درج نام فعلی برند در عنوان یا متن از <code>{brand}</code> استفاده کنید.</p>
             <label class="check-label"><input id="notice-active" type="checkbox"> نمایش در بالای سایت</label>
             <div class="actions">
               <button type="submit">ذخیره اطلاعیه</button>
@@ -183,7 +202,7 @@
   </main>
   <footer class="site-footer">
     <div class="wrap footer-inner">
-      <a class="logo" href="/"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
+      <a class="logo" href="/"><span class="logo-mark" aria-hidden="true">آ</span><b>آسان‌گذر</b></a>
       <div class="footer-links">
         <a href="/services.html">سرویس‌ها</a><a href="/network.html">زیرساخت</a><a href="/status.html">وضعیت سرویس‌ها</a><a href="/contact.html">پشتیبانی</a>
       </div>

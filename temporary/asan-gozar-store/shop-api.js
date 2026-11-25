@@ -1,6 +1,7 @@
 import { checkPassword, hashPassword, validPassword, validUsername } from './auth.js';
 import { deliverToInbox } from './inbox.js';
 import { BACKUP_LIMIT, BackupError } from './backups.mjs';
+import { BRAND_KEY, brandText, readBrand, validBrandName } from './brand.mjs';
 
 const PREFIX = '/shop/api/';
 const SESSION_COOKIE = '__Host-ag-session';
@@ -115,6 +116,19 @@ async function getNotice(env) {
   catch { return emptyNotice; }
 }
 
+async function saveAdminSetting(env, session, key, value) {
+  const result = await run(env, `INSERT INTO settings(key,value) SELECT ?,? WHERE EXISTS(
+    SELECT 1 FROM web_shop_sessions s JOIN store_accounts a ON a.id=s.user_id WHERE s.token=? AND s.expires_at>?
+    AND (a.owner=1 OR EXISTS(SELECT 1 FROM admins WHERE user_id=a.id)))
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value, session.token, Date.now());
+  return result.meta.changes > 0;
+}
+
+async function publicPlans(env, plans) {
+  const name = await readBrand(env.DB);
+  return json({ plans: plans.map(plan => ({ ...plan, category: brandText(plan.category, name) })) });
+}
+
 async function changePassword(request, env, session) {
   if (await limited(env, `password:${session.user_id}`, 5)) {
     return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
@@ -214,7 +228,7 @@ async function manageBackup(route, request, env, session) {
     return new Response(backups.download(), { headers: {
       'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'same-origin',
-      'Content-Disposition': `attachment; filename="asan-gozar-${new Date().toISOString().slice(0, 10)}.agbackup"`,
+      'Content-Disposition': `attachment; filename="store-backup-${new Date().toISOString().slice(0, 10)}.agbackup"`,
     } });
   } catch (error) {
     if (error instanceof BackupError) return json({ error: error.message }, error.status);
@@ -283,14 +297,17 @@ export async function webShopRequest(request, env, update) {
 
   if (route === 'notice' && request.method === 'GET') {
     const notice = await getNotice(env);
-    return json({ notice: notice.active ? notice : null });
+    if (!notice.active) return json({ notice: null });
+    const name = await readBrand(env.DB);
+    return json({ notice: { ...notice, title: brandText(notice.title, name), message: brandText(notice.message, name) } });
   }
+  if (route === 'brand' && request.method === 'GET') return json({ name: await readBrand(env.DB) });
 
   if (route === 'catalog' && request.method === 'GET') {
     const plans = await all(env, `SELECT c.id AS categoryId,c.name AS category,p.gb,p.price,s.days
       FROM plans p JOIN store_plan_specs s ON s.plan_key=p.key JOIN store_categories c ON c.id=s.category_id
       WHERE c.active=1 ORDER BY c.id,p.sort,p.price,p.key`);
-    return json({ plans });
+    return publicPlans(env, plans);
   }
 
   if (route === 'featured' && request.method === 'GET') {
@@ -300,7 +317,7 @@ export async function webShopRequest(request, env, update) {
       FROM plans p JOIN store_plan_specs s ON s.plan_key=p.key JOIN store_categories c ON c.id=s.category_id
       WHERE c.active=1 AND p.gb>0 AND p.price>=0
     ) SELECT categoryId,category,gb,price,days FROM ranked WHERE position=1 ORDER BY categoryId LIMIT 3`);
-    return json({ plans });
+    return publicPlans(env, plans);
   }
 
   if (['register','login'].includes(route) && request.method === 'POST') {
@@ -362,16 +379,21 @@ export async function webShopRequest(request, env, update) {
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
+  if (route === 'admin/brand' && request.method === 'POST') {
+    if (!admin) return json({ error: 'دسترسی ندارید.' }, 403);
+    const body = await readBody(request);
+    const name = validBrandName(body?.name);
+    if (!name) return json({ error: 'نام برند باید ۱ تا ۶۰ نویسه باشد. برای نام از حروف، عدد و نشانه‌های معمول استفاده کنید.' }, 400);
+    return await saveAdminSetting(env, session, BRAND_KEY, name)
+      ? json({ name }) : json({ error: 'دوباره وارد شوید.' }, 401);
+  }
   if (route === 'admin/notice') {
     if (!admin) return json({ error: 'دسترسی ندارید.' }, 403);
     if (request.method === 'GET') return json({ notice: await getNotice(env) });
     const notice = parseNotice(await readBody(request));
     if (!notice) return json({ error: 'عنوان و متن اطلاعیه را بررسی کنید.' }, 400);
-    const result = await run(env, `INSERT INTO settings(key,value) SELECT ?,? WHERE EXISTS(
-      SELECT 1 FROM web_shop_sessions s JOIN store_accounts a ON a.id=s.user_id WHERE s.token=? AND s.expires_at>?
-      AND (a.owner=1 OR EXISTS(SELECT 1 FROM admins WHERE user_id=a.id)))
-      ON CONFLICT(key) DO UPDATE SET value=excluded.value`, NOTICE_KEY, JSON.stringify(notice), sessionKey, Date.now());
-    return result.meta.changes ? json({ notice }) : json({ error: 'دوباره وارد شوید.' }, 401);
+    return await saveAdminSetting(env, session, NOTICE_KEY, JSON.stringify(notice))
+      ? json({ notice }) : json({ error: 'دوباره وارد شوید.' }, 401);
   }
   if (route === 'password' && request.method === 'POST') return changePassword(request, env, session);
   if (route === 'admin/password' && request.method === 'POST') {
@@ -409,7 +431,7 @@ export async function webShopRequest(request, env, update) {
   const body = await readBody(request);
   if (!body || body.revision !== session.revision) return json({ error: 'صفحه را تازه کنید.' }, 409);
   const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action)
-    .filter(action => !['web:backup','web:notice'].includes(action) && !action?.startsWith('web:reset_password:'));
+    .filter(action => !['web:backup','web:notice','web:brand'].includes(action) && !action?.startsWith('web:reset_password:'));
   const state = JSON.parse(session.state_json);
   const image = body.kind === 'image' && validImage(body.image);
   const input = publicState(session).input;

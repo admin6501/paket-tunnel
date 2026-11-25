@@ -9,6 +9,7 @@ import { migrationJournal } from './migration-journal.js';
 import { bulkMigrationQueue } from './bulk-migration.js';
 import { webShopReview } from './shop-api.js';
 import { deliverToInbox } from './inbox.js';
+import { brandText } from './brand.mjs';
 
 // موتور فروش، تحویل و مدیریت اشتراک آسان‌گذر.
 const NAME_RE = /^[A-Za-z]+$/;
@@ -42,7 +43,7 @@ const APPS = {
 };
 
 const MAIN_TEXT = "🏠 <b>منوی اصلی</b>\n\nیکی از گزینه‌های زیر را انتخاب کنید:";
-const DEFAULT_START_TEXT = "سلام {name} 👋";
+const DEFAULT_START_TEXT = "سلام {name}، به فروشگاه {brand} خوش آمدید.";
 const MAX_START_TEXT = 700;
 const appKeyOK = key => /^[A-Za-z0-9_-]{1,30}$/.test(key);
 function parseAppLinks(value) {
@@ -730,7 +731,7 @@ const mainMenuKb = (env) => {
 
 function startGreeting(env, name) {
   const template = env.cfg.start_text || DEFAULT_START_TEXT;
-  return esc(template).replaceAll('{name}', () => esc(name || ''));
+  return esc(brandText(template, '{brand}')).replaceAll('{name}', () => esc(name || ''));
 }
 async function sendMainMenu(env, chat_id, greeting = "") {
   const text = greeting ? `${greeting}\n\n${MAIN_TEXT}` : MAIN_TEXT;
@@ -1833,6 +1834,7 @@ async function handleAdminUICallback(c, cq, answer) {
   if (d === "admin:settings") {
     delete st.admin_ui_step; delete st.admin_ui_key;
     const rows = [];
+    if (env.WEB_STATE) rows.push([btn('نام برند سایت', 'web:brand')]);
     if (owner) rows.push([btn("➕ افزودن یا تنظیم اتصال پنل", "admin:panelsetup")]);
     if (owner) rows.push([btn('➕ افزودن پنل دیگر','admin:multipanel_add')]);
     if (owner) rows.push([btn('🖥 پنل‌های متصل','admin:multipanels')]);
@@ -1896,7 +1898,7 @@ async function handleAdminUICallback(c, cq, answer) {
   if (d.startsWith("admin:setting:")) {
     const key = d.slice("admin:setting:".length), meta = Object.hasOwn(META, key) ? META[key] : null;
     if (!meta) return answer("تنظیم یافت نشد.", true);
-    if (key === "start_text") return prompt("setting",key,`✏️ <b>متن پیام شروع</b>\nمتن فعلی: <code>${esc(env.cfg.start_text || DEFAULT_START_TEXT)}</code>\n\nمتن جدید را بفرستید؛ برای نمایش نام کاربر از <code>{name}</code> استفاده کنید. حداکثر ${MAX_START_TEXT} نویسه؛ برای بازگشت به متن پیش‌فرض، - بفرستید.`,"admin:settings");
+    if (key === "start_text") return prompt("setting",key,`✏️ <b>متن پیام شروع</b>\nمتن فعلی: <code>${esc(brandText(env.cfg.start_text || DEFAULT_START_TEXT, '{brand}'))}</code>\n\nبرای نام کاربر از <code>{name}</code> و برای نام برند از <code>{brand}</code> استفاده کنید. حداکثر ${MAX_START_TEXT} نویسه. برای بازگشت به متن پیش‌فرض، - بفرستید.`,"admin:settings");
     if (key === "referral_discount") return prompt("setting",key,`🎁 <b>هدیه دعوت</b>\nمقدار فعلی: ${toman(env.cfg.referral_discount)}\nمبلغ جدید را به تومان بفرستید؛ عدد 0 هدیه را غیرفعال می‌کند. این هدیه تخفیف خرید بعدی معرف است و به کیف پول اضافه نمی‌شود.`,"admin:settings");
     if (key === "test_enabled") return renderAdmin(`🎁 سرویس تست اکنون ${env.cfg.test_enabled === "1" ? "فعال" : "غیرفعال"} است.`, kb([[btn("✅ فعال", "admin:test:1"),btn("⛔ غیرفعال", "admin:test:0")],[btn("🔙 بازگشت", "admin:settings")]]));
     if (key === 'location_change_enabled') return renderAdmin(`🌍 تغییر لوکیشن مشتری اکنون ${env.cfg[key]==='1'?'فعال':'خاموش'} است.`,kb([[btn('✅ فعال',`admin:policy:${key}:1`),btn('⛔ خاموش',`admin:policy:${key}:0`)],[btn('🔙 بازگشت','admin:settings')]]));

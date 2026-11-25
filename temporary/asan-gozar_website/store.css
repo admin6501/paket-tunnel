@@ -174,3 +174,33 @@ body.light #status.error { color: #a42234; }
 .featured-card strong { font-size: 1.15rem; color: var(--cyan); }
 .featured-card span, #featured-status { color: var(--muted); font-size: .92rem; }
 #featured-status:empty { display: none; }
+
+.info-main { padding-block-end: clamp(2rem, 6vw, 5rem); }
+.info-intro {
+  margin-block: clamp(1.2rem, 4vw, 3rem) clamp(2.4rem, 7vw, 5.2rem);
+  padding: clamp(1.4rem, 5vw, 3.5rem); border: 1px solid var(--line);
+  border-radius: clamp(1.1rem, 4vw, 2.2rem);
+  background: radial-gradient(ellipse at 12% 25%, color-mix(in srgb, var(--blue) 13%, transparent), transparent 70%), var(--surface);
+}
+.info-intro h1 { margin: 0 0 1rem; font-size: clamp(2rem, 5vw, 3.75rem); line-height: 1.4; overflow-wrap: anywhere; }
+.info-intro p { font-size: 1rem; margin: 0; color: var(--muted); max-width: 53ch; }
+.network-intro { display: grid; grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); align-items: center; gap: clamp(1.2rem, 4vw, 3rem); }
+.network-intro .store-hero-photo { aspect-ratio: 1.55; }
+.info-section { margin-block: clamp(2rem, 7vw, 4.5rem); }
+.info-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.info-card {
+  display: flex; flex-direction: column; align-items: start; gap: .75rem; padding: clamp(1.1rem, 3vw, 1.8rem);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; min-width: 0;
+}
+.featured-info { grid-column: 1 / -1; background: color-mix(in srgb, var(--blue) 9%, var(--surface)); }
+.info-card h3 { margin: 0; font-size: 1.22rem; }
+.info-card p { margin: 0; color: var(--muted); }
+.info-card .hero-links { margin-top: .35rem; }
+.info-card .info-link { margin-top: auto; color: var(--cyan); font-weight: 700; text-decoration: underline; text-underline-offset: .28rem; }
+.settings-editor { margin-block: 1rem; }
+.settings-editor h2 { margin: 0 0 1rem; font-size: 1.25rem; }
+.settings-editor p { margin: .35rem 0 0; color: var(--muted); font-size: .92rem; }
+@media (max-width: 760px) {
+  .network-intro { grid-template-columns: 1fr; }
+  .info-cards { grid-template-columns: 1fr; }
+}
