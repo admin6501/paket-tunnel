@@ -70,3 +70,35 @@ button{cursor:pointer}
 
 .theme, .menu { width: auto; min-width: 2.75rem; padding-inline: .55rem; font-size: .75rem; }
 .float-actions a, .float-actions button { width: auto; min-width: 3rem; padding-inline: .45rem; font-size: .7rem; }
+
+body { min-height: 100svh; display: flex; flex-direction: column; }
+body > main { flex: 1 0 auto; }
+.top { flex: 0 0 auto; }
+.top .logo { white-space: nowrap; }
+.top .nav { font-size: .91rem; align-items: center; gap: clamp(.75rem, 2.5vw, 1.8rem); }
+.top .nav [aria-current] { color: var(--text); font-weight: 750; }
+.top .account-link { display: inline-flex; align-items: center; padding: .42rem .85rem; border-radius: .7rem; background: var(--cyan); color: #061e20; font-size: .84rem; font-weight: 800; white-space: nowrap; }
+.top .account-link:hover { filter: brightness(1.1); }
+.site-footer .footer-links { font-size: .84rem; }
+.site-notice[hidden] { display: none; }
+.site-notice { background: #33271a; color: #fff4dd; border-bottom: 1px solid #ffba554d; }
+.site-notice[data-kind=maintenance] { background: #102a45; color: #eaf4ff; border-color: #5895d35e; }
+.site-notice[data-kind=notice] { background: #0c3433; color: #e9fffc; border-color: #59a99769; }
+.notice-row { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .85rem; padding-block: .55rem; font-size: .92rem; }
+.notice-row strong { flex: 1 1 min(55%, 12rem); font-weight: 700; overflow-wrap: anywhere; }
+.notice-row a { font-weight: 700; text-decoration: underline; text-underline-offset: .28rem; }
+.notice-type { padding: .05rem .5rem; border-radius: .35rem; background: #ffffff19; font-weight: 750; }
+.status-notice-card { margin-bottom: 3rem; padding: clamp(1rem, 3vw, 2rem); background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; }
+.status-notice-card h2 { margin: 0 0 .6rem; }
+.status-notice-card p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+@media (max-width: 650px) {
+  .top .nav { align-items: stretch; gap: .25rem; }
+  .top .actions { gap: .35rem; }
+  .top .account-link { padding-inline: .55rem; }
+}
+@media (max-width: 380px) {
+  .top { padding-inline: .65rem; }
+  .top .logo { gap: .35rem; }
+  .top .logo-mark { width: 2.15rem; height: 2.15rem; border-radius: .65rem; }
+  .top .theme, .top .menu { min-width: 2.2rem; padding-inline: .3rem; }
+}

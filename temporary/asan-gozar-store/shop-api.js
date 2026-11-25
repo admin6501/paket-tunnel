@@ -9,6 +9,10 @@ const RECEIPT_TTL = 30 * 24 * 60 * 60_000;
 const TOKEN = /^[a-zA-Z0-9_-]{32}$/;
 const IMAGE_LIMIT = 600_000;
 const BODY_LIMIT = 810_000;
+const NOTICE_KEY = 'website_notice';
+const emptyNotice = { active: false, kind: 'outage', title: '', message: '' };
+const noticeKinds = new Set(['outage', 'maintenance', 'notice']);
+const noticeEmoji = /[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0E\uFE0F\u200D\u20E3\u{E0020}-\u{E007F}]/gu;
 
 const run = (env, sql, ...args) => env.DB.prepare(sql).bind(...args).run();
 const first = (env, sql, ...args) => env.DB.prepare(sql).bind(...args).first();
@@ -93,6 +97,22 @@ function publicState(session) {
 async function isAdmin(env, uid) {
   return Boolean(await first(env, 'SELECT 1 FROM store_accounts WHERE owner=1 AND id=?', uid)) ||
     Boolean(await first(env, 'SELECT 1 FROM admins WHERE user_id=?', uid));
+}
+
+function parseNotice(value) {
+  if (!value || typeof value.active !== 'boolean' || !noticeKinds.has(value.kind) ||
+      typeof value.title !== 'string' || typeof value.message !== 'string') return null;
+  const title = value.title.replace(noticeEmoji, '').trim();
+  const message = value.message.replace(noticeEmoji, '').trim();
+  if (title.length > 100 || message.length > 1500 || /[\x00-\x1f\x7f]/u.test(title) ||
+      /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(message) || (value.active && (!title || !message))) return null;
+  return { active: value.active, kind: value.kind, title, message };
+}
+
+async function getNotice(env) {
+  const row = await first(env, 'SELECT value FROM settings WHERE key=?', NOTICE_KEY);
+  try { return (row && parseNotice(JSON.parse(row.value))) || emptyNotice; }
+  catch { return emptyNotice; }
 }
 
 async function changePassword(request, env, session) {
@@ -261,6 +281,11 @@ export async function webShopRequest(request, env, update) {
   const now = Date.now();
   if (await limited(env, `request:${ip}`, 90)) return json({ error: 'لطفاً کمی صبر کنید.' }, 429);
 
+  if (route === 'notice' && request.method === 'GET') {
+    const notice = await getNotice(env);
+    return json({ notice: notice.active ? notice : null });
+  }
+
   if (route === 'catalog' && request.method === 'GET') {
     const plans = await all(env, `SELECT c.id AS categoryId,c.name AS category,p.gb,p.price,s.days
       FROM plans p JOIN store_plan_specs s ON s.plan_key=p.key JOIN store_categories c ON c.id=s.category_id
@@ -327,6 +352,17 @@ export async function webShopRequest(request, env, update) {
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
+  if (route === 'admin/notice') {
+    if (!admin) return json({ error: 'دسترسی ندارید.' }, 403);
+    if (request.method === 'GET') return json({ notice: await getNotice(env) });
+    const notice = parseNotice(await readBody(request));
+    if (!notice) return json({ error: 'عنوان و متن اطلاعیه را بررسی کنید.' }, 400);
+    const result = await run(env, `INSERT INTO settings(key,value) SELECT ?,? WHERE EXISTS(
+      SELECT 1 FROM web_shop_sessions s JOIN store_accounts a ON a.id=s.user_id WHERE s.token=? AND s.expires_at>?
+      AND (a.owner=1 OR EXISTS(SELECT 1 FROM admins WHERE user_id=a.id)))
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value`, NOTICE_KEY, JSON.stringify(notice), sessionKey, Date.now());
+    return result.meta.changes ? json({ notice }) : json({ error: 'دوباره وارد شوید.' }, 401);
+  }
   if (route === 'password' && request.method === 'POST') return changePassword(request, env, session);
   if (route === 'admin/password' && request.method === 'POST') {
     return admin ? resetCustomerPassword(request, env, session) : json({ error: 'دسترسی ندارید.' }, 403);
@@ -363,7 +399,7 @@ export async function webShopRequest(request, env, update) {
   const body = await readBody(request);
   if (!body || body.revision !== session.revision) return json({ error: 'صفحه را تازه کنید.' }, 409);
   const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action)
-    .filter(action => action !== 'web:backup' && !action?.startsWith('web:reset_password:'));
+    .filter(action => !['web:backup','web:notice'].includes(action) && !action?.startsWith('web:reset_password:'));
   const state = JSON.parse(session.state_json);
   const image = body.kind === 'image' && validImage(body.image);
   const input = publicState(session).input;

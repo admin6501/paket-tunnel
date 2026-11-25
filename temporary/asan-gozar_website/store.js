@@ -145,6 +145,16 @@ function show(newState) {
           button.type = 'button';
           button.textContent = textOnly(option.text).trim();
           button.addEventListener('click', () => {
+            if (option.action === 'web:notice') {
+              void perform(async () => {
+                const { notice } = await api('admin/notice');
+                openAccountForm('notice-editor', 'notice-heading', button);
+                setNoticeFields(notice);
+              }).then(() => {
+                if (!get('notice-editor').hidden) get('notice-heading').focus();
+              });
+              return;
+            }
             if (option.action === 'web:backup') return openAccountForm('backup-panel', 'backup-password', button);
             const target = /^web:reset_password:(\d+)$/.exec(option.action);
             if (target) {
@@ -179,7 +189,7 @@ function show(newState) {
 function setBusy(value) {
   busy = value;
   app.setAttribute('aria-busy', String(value));
-  for (const el of app.querySelectorAll('button,input,textarea')) el.disabled = value;
+  for (const el of app.querySelectorAll('button,input,textarea,select')) el.disabled = value;
 }
 
 async function perform(task) {
@@ -201,7 +211,6 @@ async function perform(task) {
 
 async function action(body) {
   show(await api('action', { ...body, revision: state.revision }));
-  if (state.admin) void loadCatalog();
 }
 
 async function refresh() {
@@ -209,51 +218,13 @@ async function refresh() {
   if (state.signedIn && !state.messages.length) await action({ kind: 'home' });
 }
 
-let catalogRequest = 0;
-async function loadCatalog() {
-  const request = ++catalogRequest;
-  const target = get('catalog-plans');
-  const notice = get('catalog-status');
-  try {
-    const { plans } = await api('catalog');
-    if (request !== catalogRequest) return;
-    const categories = new Map();
-    for (const plan of plans) {
-      if (!categories.has(plan.categoryId)) {
-        const section = document.createElement('section');
-        section.className = 'plan-category';
-        const title = document.createElement('h3');
-        title.textContent = textOnly(plan.category).trim() || 'بسته‌ها';
-        const grid = document.createElement('ul');
-        grid.className = 'plan-grid';
-        section.append(title, grid);
-        categories.set(plan.categoryId, { section, grid });
-      }
-      const card = document.createElement('li');
-      const volume = document.createElement('strong');
-      volume.textContent = `${number.format(plan.gb)} گیگابایت`;
-      const duration = document.createElement('span');
-      duration.textContent = `${number.format(plan.days)} روز اعتبار`;
-      const price = document.createElement('b');
-      price.textContent = `${number.format(plan.price)} تومان`;
-      card.append(volume, duration, price);
-      categories.get(plan.categoryId).grid.append(card);
-    }
-    target.replaceChildren(...Array.from(categories.values(), category => category.section));
-    notice.textContent = plans.length ? '' : 'در حال حاضر بسته‌ای برای خرید فعال نیست.';
-  } catch {
-    if (request !== catalogRequest) return;
-    target.replaceChildren();
-    notice.textContent = 'تعرفه‌ها در دسترس نیستند. صفحه را دوباره بارگذاری کنید.';
-  }
-}
-
 function closeAccountForms() {
   get('password-change').hidden = true;
   get('password-open').setAttribute('aria-expanded', 'false');
   get('password-reset').hidden = true;
   get('backup-panel').hidden = true;
-  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore']) get(id).reset();
+  get('notice-editor').hidden = true;
+  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form']) get(id).reset();
   resetTarget = null;
   panelTrigger = null;
 }
@@ -275,7 +246,29 @@ get('password-open').addEventListener('click', () => {
   openAccountForm('password-change', 'current-password', get('password-open'));
   get('password-open').setAttribute('aria-expanded', 'true');
 });
-for (const id of ['password-cancel', 'reset-cancel', 'backup-close']) get(id).addEventListener('click', cancelAccountForm);
+for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel']) get(id).addEventListener('click', cancelAccountForm);
+function setNoticeFields(notice) {
+  get('notice-kind').value = notice.kind;
+  get('notice-heading').value = notice.title;
+  get('notice-message').value = notice.message;
+  get('notice-active').checked = notice.active;
+}
+
+get('notice-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    const { notice } = await api('admin/notice', {
+      kind: get('notice-kind').value,
+      title: get('notice-heading').value,
+      message: get('notice-message').value,
+      active: get('notice-active').checked,
+    });
+    setNoticeFields(notice);
+    document.dispatchEvent(new Event('shop:notice'));
+    return notice.active ? 'اطلاعیه منتشر شد.' : 'اطلاعیه ذخیره شد و نمایش آن خاموش است.';
+  });
+});
+
 get('password-form').addEventListener('submit', event => {
   event.preventDefault();
   void perform(async () => {
@@ -333,7 +326,6 @@ get('backup-restore').addEventListener('submit', event => {
         method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream', 'X-Asan-Gozar-Restore-Key': ticket },
       });
       show(await response.json());
-      void loadCatalog();
       return 'داده‌های فروشگاه بازیابی شدند. دوباره وارد شوید.';
     } finally { password.value = ''; }
   });
@@ -445,4 +437,3 @@ reply.addEventListener('submit', event => {
   });
 });
 void perform(refresh);
-void loadCatalog();
