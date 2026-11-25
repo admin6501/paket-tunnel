@@ -138,6 +138,15 @@ CREATE TABLE IF NOT EXISTS wallet_review_resolutions (
  resolved_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS store_card_review_actions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ order_id INTEGER NOT NULL,
+ actor_id INTEGER NOT NULL,
+ outcome TEXT NOT NULL CHECK(outcome IN ('approved','pending','rejected')),
+ created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_store_card_review_order ON store_card_review_actions(order_id,outcome);
+
 -- Site customer profiles and access control.
 CREATE TABLE IF NOT EXISTS store_profiles (
  user_id INTEGER PRIMARY KEY,

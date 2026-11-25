@@ -627,6 +627,118 @@ test('order review includes older card purchases and refunded wallet payments', 
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM services').get().n, 0);
 });
 
+test('admins can resolve held card orders without repeating a panel write', async t => {
+  const { sqlite, env, owner } = await fixture(t);
+  const buyer = browser(env, '192.0.2.160'), admin = browser(env, '192.0.2.161');
+  await buyer.request('register', { username: 'card_recovery', name: 'Buyer', password });
+  const buyerId = sqlite.prepare("SELECT id FROM store_accounts WHERE username='card_recovery'").get().id;
+  const identity = await panelAccountKey(env.PANEL_URL, env.PANEL_USER);
+  sqlite.prepare("INSERT INTO settings(key,value) VALUES('sub_base_url','https://sub.example/sub/')").run();
+  const seed = (name, subId, serviceId = null) => {
+    const id = sqlite.prepare(`INSERT INTO orders(user_id,service_name,final_price,volume,duration,gb,days,renew_service_id,status,created_at)
+      VALUES(?,?,70000,'1 GB','30 days',1,30,?,'needs_review','2026-10-11 16:15') RETURNING id`)
+      .get(buyerId, name, serviceId).id;
+    sqlite.prepare('INSERT INTO store_order_routes VALUES(?,?,?,?)').run(id, '1', 3, identity);
+    if (!serviceId) {
+      const attempt = `order:${id}:0123456789abcdef`;
+      sqlite.prepare('INSERT INTO provision_attempts VALUES(?,?,?,?,?)').run(attempt, name, subId, 3, '2026-10-11 16:17');
+      sqlite.prepare('INSERT INTO settings VALUES(?,?)').run(`attempt_panel:${attempt}`, identity);
+    }
+    return id;
+  };
+  const original = seed('Recovered', 'recovered-sub');
+  const missing = seed('NotCreated', 'missing-sub');
+  const closed = seed('CloseOrder', 'closed-sub');
+  const renewingService = sqlite.prepare("INSERT INTO services(user_id,name,panel_email,inbound_id,sub_id,volume_bytes) VALUES(?,'Renewing','Renewing',3,'renew-sub',0) RETURNING id").get(buyerId).id;
+  sqlite.prepare('INSERT INTO settings VALUES(?,?)').run(`service_panel:${renewingService}`, identity);
+  const renewal = seed('Renewing', 'renew-sub', renewingService);
+  const expires = Date.now() + 86400_000;
+  const accounts = new Map([
+    ['Recovered', { email: 'Recovered', subId: 'recovered-sub', memberships: [{inboundId: 3}], totalGB: 2 ** 30, expiryTime: expires }],
+    ['Renewing', { email: 'Renewing', subId: 'renew-sub', memberships: [{inboundId: 3}], totalGB: 3 * 2 ** 30, expiryTime: expires }],
+  ]);
+  let anchorClients = [{ email: 'NotCreated', subId: 'missing-sub' }];
+  let unexpectedWrites = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const target = new URL(url);
+    assert.equal(target.hostname, 'panel.example');
+    const p = target.pathname;
+    if (p.endsWith('/login')) return Response.json({ success: true }, { headers: { 'set-cookie': 'vpn-ui=fixture' } });
+    if (options?.method !== 'GET') unexpectedWrites++;
+    if (p.endsWith('/clients/list')) {
+      const row = accounts.get(target.searchParams.get('search'));
+      return Response.json({ success: true, obj: { rows: row ? [row] : [], total: row ? 1 : 0 } });
+    }
+    if (p.endsWith('/inbounds/get/3')) return Response.json({ success: true, obj: { settings: JSON.stringify({ clients: anchorClients }) } });
+    throw new Error('Unexpected panel route');
+  });
+  await buyer.init();
+  assert.equal((await buyer.request('action', { kind: 'button', action: `admin:card_check:${original}`, revision: buyer.state.revision })).status, 400);
+
+  await admin.request('login', { username: 'owner', password });
+  await admin.init();
+  const inspect = async id => {
+    await admin.act({kind:'home'});
+    for (const action of ['admin:root','admin:wallet_reviews',`admin:wallet_review:${id}`]) await admin.press(action);
+  };
+  const confirm = () => admin.buttons().find(action => action.startsWith('admin:card_apply:'));
+  const getStatus = id => sqlite.prepare('SELECT status FROM orders WHERE id=?').get(id).status;
+
+  await inspect(original);
+  await admin.press(`admin:card_check:${original}`);
+  await admin.press(`admin:card_accept:${original}`);
+  const staleAction = confirm();
+  accounts.get('Recovered').subId = 'unrelated-sub';
+  await admin.press(staleAction);
+  assert.equal(getStatus(original), 'needs_review');
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM services WHERE sub_id='recovered-sub'").get().n, 0);
+  accounts.get('Recovered').subId = 'recovered-sub';
+  await inspect(original);
+  await admin.press(`admin:card_check:${original}`);
+  await admin.press(`admin:card_accept:${original}`);
+  const revision = admin.state.revision, accept = confirm();
+  await admin.press(accept);
+  assert.equal((await admin.request('action', { kind: 'button', action: accept, revision })).status, 409);
+  assert.equal(getStatus(original), 'approved');
+  assert.deepEqual({ ...sqlite.prepare("SELECT user_id,sub_link FROM services WHERE sub_id='recovered-sub'").get() },
+    { user_id: buyerId, sub_link: 'https://sub.example/sub/recovered-sub' });
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM services WHERE sub_id='recovered-sub'").get().n, 1);
+
+  await inspect(missing);
+  await admin.press(`admin:card_check:${missing}`);
+  assert.ok(!admin.buttons().includes(`admin:card_retry:${missing}`), 'a partial inbound write blocks retries');
+  anchorClients = [];
+  await inspect(missing);
+  await admin.press(`admin:card_check:${missing}`);
+  await admin.press(`admin:card_retry:${missing}`);
+  await admin.press(confirm());
+  assert.equal(getStatus(missing), 'pending');
+  assert.ok(admin.buttons().includes(`approve_${missing}`));
+  await admin.press('web:orders');
+  await admin.press(`web:receipt:order:${missing}`);
+  assert.ok(admin.buttons().includes(`approve_${missing}`), 'requeued older orders remain actionable after receipt expiry');
+
+  // These fixture actions compress several independent reviews into one minute.
+  sqlite.exec('DELETE FROM web_shop_limits');
+  await inspect(closed);
+  await admin.press(`admin:card_reject:${closed}`);
+  await admin.press(confirm());
+  assert.equal(getStatus(closed), 'rejected');
+
+  await inspect(renewal);
+  await admin.press(`admin:card_check:${renewal}`);
+  assert.ok(!admin.buttons().includes(`admin:card_retry:${renewal}`));
+  await admin.press(`admin:card_accept:${renewal}`);
+  await admin.press(confirm());
+  assert.equal(getStatus(renewal), 'approved');
+  assert.equal(sqlite.prepare('SELECT volume_bytes FROM services WHERE id=?').get(renewingService).volume_bytes, 2 ** 30);
+  const audit = sqlite.prepare('SELECT order_id,actor_id,outcome FROM store_card_review_actions ORDER BY id').all()
+    .map(row => [row.order_id, row.actor_id, row.outcome]);
+  assert.deepEqual(audit, [[original,owner.id,'approved'],[missing,owner.id,'pending'],[closed,owner.id,'rejected'],[renewal,owner.id,'approved']]);
+  assert.equal(unexpectedWrites, 0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM wallet_entries').get().n, 0);
+});
+
 test('card purchase and wallet top-up are reviewed in the web admin without an external messenger', async t => {
   const { sqlite, env } = await fixture(t);
   sqlite.exec(`INSERT INTO plans VALUES('p10',10,70000,1);

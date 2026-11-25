@@ -280,11 +280,16 @@ export async function webShopReview(env, uid, action) {
   if (!env.WEB_STATE || !(await isAdmin(env, uid))) return null;
   if (action === 'web:orders' || /^web:orders:\d{1,4}$/.test(action)) {
     const page = Number(action.split(':')[2] || 0);
-    const items = await all(env, `SELECT r.kind,r.reference FROM web_shop_receipts r
+    const now = Date.now();
+    const items = await all(env, `SELECT r.kind,r.reference,r.expires_at AS priority FROM web_shop_receipts r
       LEFT JOIN orders o ON r.kind='order' AND o.id=r.reference
       LEFT JOIN wallet_topups w ON r.kind='topup' AND w.id=r.reference
       WHERE r.expires_at>? AND (o.status='pending' OR w.status='pending')
-      ORDER BY r.expires_at DESC LIMIT 11 OFFSET ?`, Date.now(), page * 10);
+      UNION ALL
+      SELECT 'order',o.id,latest.created_at FROM orders o
+      JOIN (SELECT order_id,MAX(created_at) AS created_at FROM store_card_review_actions WHERE outcome='pending' GROUP BY order_id) latest ON latest.order_id=o.id
+      WHERE o.status='pending' AND NOT EXISTS(SELECT 1 FROM web_shop_receipts r WHERE r.kind='order' AND r.reference=o.id AND r.expires_at>?)
+      ORDER BY priority DESC, reference DESC LIMIT 11 OFFSET ?`, now, now, page * 10);
     const buttons = items.slice(0, 10).map(r => [{ text: `${r.kind === 'order' ? 'سفارش' : 'شارژ کیف پول'} ${r.reference}`, callback_data: `web:receipt:${r.kind}:${r.reference}` }]);
     const nav = [];
     if (page) nav.push({ text: 'قبلی', callback_data: `web:orders:${page - 1}` });
@@ -303,6 +308,12 @@ export async function webShopReview(env, uid, action) {
   const back = kind === 'order' && result?.status === 'needs_review'
     ? [{ text: 'بازگشت به بررسی سفارش', callback_data: `admin:wallet_review:${reference}` }]
     : [{ text: 'فیش‌ها', callback_data: 'web:orders' }];
+  if (!receipt && kind === 'order' && result?.status === 'pending' &&
+      await first(env, "SELECT 1 FROM store_card_review_actions WHERE order_id=? AND outcome='pending'", Number(reference))) {
+    return { text: `سفارش ${reference} پس از بررسی به صف تأیید برگشته است. تصویر رسید در دسترس نیست؛ قبل از تأیید، پرداخت را جداگانه بررسی کنید.`,
+      buttons: [[{ text: 'تأیید و اجرای سفارش', callback_data: `approve_${reference}` },
+        { text: 'رد سفارش', callback_data: `reject_order:${reference}` }], back] };
+  }
   if (!receipt) return { text: 'تصویر این فیش در دسترس نیست.', buttons: [back] };
   const caption = `فیش ${kind === 'order' ? 'سفارش' : 'شارژ'} ${reference}\nکاربر: ${result.user_id}\nمبلغ: ${Number(result.amount).toLocaleString('fa-IR')} تومان`;
   const image = `${PREFIX}receipt?kind=${kind}&id=${reference}`;

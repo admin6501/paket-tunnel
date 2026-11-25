@@ -987,6 +987,106 @@ async function claimPurchaseChoice(env,st,uid) {
 const channelKey = (env, key, uid) => `${env.WEB_STATE ? 'web_' : ''}${key}:${uid}`;
 
 // ---------------------------------------------------------- تحویل سفارش (ساخت/تمدید در پنل)
+async function readCardOrderEvidence(env, order) {
+  const route = await first(env, 'SELECT * FROM store_order_routes WHERE order_id=?', order.id);
+  if (order.renew_service_id) {
+    const service = await getService(env, order.renew_service_id);
+    if (!service?.sub_id || Number(service.user_id) !== Number(order.user_id)) {
+      throw new Error('سرویس اصلی این تمدید در فروشگاه پیدا نشد.');
+    }
+    const account = await panelServiceAccount(env, service);
+    if (!account?.memberships?.length) throw new Error('هویت سرویس در VPN-UI تأیید نشد.');
+    const identity = await currentPanelIdentity(account._panelEnv);
+    if (route?.panel_identity && route.panel_identity !== identity) throw new Error('پنل سرویس با پنل ثبت‌شده در سفارش فرق دارد.');
+    return { action: 'accept', service, account, identity, fingerprint: [service.id, account.subId, identity, account.totalGB, account.expiryTime] };
+  }
+
+  const attempts = await all(env, `SELECT p.*, i.value AS identity FROM provision_attempts p
+    LEFT JOIN settings i ON i.key='attempt_panel:'||p.attempt_key WHERE p.attempt_key LIKE ?
+    ORDER BY p.rowid DESC LIMIT 21`, `order:${order.id}:%`);
+  const identity = attempts[0]?.identity || route?.panel_identity;
+  if (!identity || !attempts.length || attempts.length > 20 ||
+      (route?.panel_identity && route.panel_identity !== identity) ||
+      attempts.some(a => (a.identity || route?.panel_identity) !== identity ||
+        a.email.trim().toLowerCase() !== String(order.service_name || '').trim().toLowerCase() ||
+        !positiveId(String(a.inbound_id)) || !a.sub_id)) {
+    throw new Error('اطلاعات تلاش قبلی برای شناسایی پنل و حساب کافی نیست. سفارش را در VPN-UI بررسی کنید.');
+  }
+  const panel = await panelForIdentity(env, identity);
+  const account = await panelAccount(panel, attempts[0].email);
+  const fingerprint = attempts.map(a => a.attempt_key);
+  const saved = await all(env, `SELECT s.id,s.user_id,s.panel_email,s.sub_id,p.value AS identity FROM services s
+    LEFT JOIN settings p ON p.key='service_panel:'||s.id WHERE s.sub_id IN (${attempts.map(() => '?').join(',')})`,
+    ...attempts.map(a => a.sub_id));
+  if (account) {
+    const attempt = attempts.find(a => a.sub_id === account.subId);
+    if (!attempt || !account.memberships?.some(m => Number(m.inboundId) === Number(attempt.inbound_id)) ||
+        saved.some(s => Number(s.user_id) !== Number(order.user_id) || s.panel_email !== attempt.email ||
+          s.sub_id !== attempt.sub_id || (s.identity && s.identity !== identity))) {
+      throw new Error('حساب پیدا شد، ولی شناسهٔ اشتراک، ورودی یا مالک آن با سفارش مطابقت ندارد.');
+    }
+    if (!panel.cfg.sub_base_url) throw new Error('ابتدا آدرس اشتراک پنل مقصد را تنظیم کنید.');
+    return { action: 'accept', account, attempt, identity, link: subLink(panel, attempt.sub_id),
+      fingerprint: [...fingerprint, account.subId, account.totalGB, account.expiryTime] };
+  }
+  if (saved.length) throw new Error('قبلاً رکوردی برای این سرویس در فروشگاه ثبت شده است؛ وضعیت پنل را بررسی کنید.');
+  if (!parseIds(route?.group_ids).length) throw new Error('گروه سفارش قدیمی مشخص نیست؛ آن را در VPN-UI بررسی کنید.');
+  for (const id of new Set(attempts.map(a => Number(a.inbound_id)))) {
+    const inbound = await panelCall(panel, 'GET', `/panel/api/inbounds/get/${id}`);
+    if (!inbound.success || typeof inbound.obj?.settings !== 'string') throw new Error('بررسی ورودی اولیه ممکن نشد.');
+    const clients = JSON.parse(inbound.obj.settings).clients;
+    if (!Array.isArray(clients)) throw new Error('فهرست ورودی اولیه در دسترس نیست.');
+    if (clients.some(client => String(client?.email ?? '').trim().toLowerCase() === attempts[0].email.trim().toLowerCase() ||
+        attempts.some(attempt => client?.subId === attempt.sub_id))) {
+      throw new Error('ردی از حساب در ورودی اولیه وجود دارد. ابتدا عضویت سرویس را در VPN-UI بررسی کنید.');
+    }
+  }
+  return { action: 'retry', fingerprint };
+}
+
+async function settleCardOrderReview(env, order, actor, action, evidence) {
+  const { id, user_id: userId } = order;
+  const to = { accept: 'approved', retry: 'pending', reject: 'rejected' }[action];
+  const guard = "EXISTS(SELECT 1 FROM orders WHERE id=? AND status='needs_review') AND NOT EXISTS(SELECT 1 FROM wallet_payments WHERE order_id=?)"
+    + " AND (SELECT COALESCE(MAX(id),0) FROM store_card_review_actions WHERE order_id=?)=?";
+  const guardArgs = [id, id, id, order.review_version];
+  const sql = [];
+  let requirement = '';
+  const required = [];
+  if (action === 'accept' && evidence.service) {
+    const serviceId = evidence.service.id;
+    requirement = " AND EXISTS(SELECT 1 FROM services WHERE id=? AND user_id=? AND sub_id=?) AND NOT EXISTS(SELECT 1 FROM service_operations WHERE service_id=?)";
+    required.push(serviceId, userId, evidence.account.subId, serviceId);
+    sql.push(env.DB.prepare(`UPDATE services SET volume=?,duration=?,volume_bytes=?,created_at=? WHERE id=? AND user_id=?
+      AND sub_id=? AND NOT EXISTS(SELECT 1 FROM service_operations WHERE service_id=?) AND ${guard}`)
+      .bind(order.volume, order.duration, Math.round(Number(order.gb || 0) * GB), now(), ...required, ...guardArgs));
+  } else if (action === 'accept') {
+    const { attempt, identity, link, account } = evidence;
+    requirement = " AND EXISTS(SELECT 1 FROM services WHERE sub_id=? AND user_id=? AND panel_email=?)"
+      + " AND NOT EXISTS(SELECT 1 FROM services s LEFT JOIN settings p ON p.key='service_panel:'||s.id"
+      + " WHERE s.sub_id=? AND (s.user_id IS NOT ? OR s.panel_email IS NOT ? OR (p.value IS NOT NULL AND p.value<>?)))";
+    required.push(attempt.sub_id, userId, attempt.email, attempt.sub_id, userId, attempt.email, identity);
+    sql.push(env.DB.prepare(`INSERT INTO services(user_id,name,volume,duration,sub_link,created_at,panel_email,inbound_id,sub_id,volume_bytes)
+      SELECT ?,?,?,?,?,?,?,?,?,? WHERE ${guard} AND NOT EXISTS(SELECT 1 FROM services WHERE sub_id=?)`)
+      .bind(userId, order.service_name, order.volume, order.duration, link, now(), attempt.email, attempt.inbound_id,
+        attempt.sub_id, Number(account.totalGB) || Math.round(Number(order.gb || 0) * GB), ...guardArgs, attempt.sub_id));
+    sql.push(env.DB.prepare(`INSERT INTO settings(key,value) SELECT 'service_panel:'||id,? FROM services
+      WHERE sub_id=? AND user_id=? AND panel_email=? AND ${guard} ON CONFLICT(key) DO NOTHING`)
+      .bind(identity, attempt.sub_id, userId, attempt.email, ...guardArgs));
+    sql.push(env.DB.prepare(`INSERT INTO settings(key,value) SELECT 'service_category:'||s.id,c.value FROM services s
+      JOIN settings c ON c.key='order_category:'||? WHERE s.sub_id=? AND s.user_id=? AND s.panel_email=? AND ${guard}
+      ON CONFLICT(key) DO NOTHING`).bind(id, attempt.sub_id, userId, attempt.email, ...guardArgs));
+  }
+  const updateIndex = sql.length;
+  sql.push(env.DB.prepare(`UPDATE orders SET status=? WHERE id=? AND ${guard}${requirement}`).bind(to, id, ...guardArgs, ...required));
+  sql.push(env.DB.prepare('INSERT INTO store_card_review_actions(order_id,actor_id,outcome,created_at) SELECT ?,?,?,? WHERE changes()>0')
+    .bind(id, actor, to, Date.now()));
+  if (to !== 'pending') sql.push(env.DB.prepare(`UPDATE store_coupon_uses SET state=? WHERE order_id=? AND state='reserved'
+    AND EXISTS(SELECT 1 FROM orders WHERE id=? AND status=?)`).bind(to === 'approved' ? 'consumed' : 'released', id, id, to));
+  const result = await env.DB.batch(sql);
+  return result[updateIndex].meta.changes === 1;
+}
+
 async function fulfillOrder(env, order, onDispatch) {
   const bytes = Math.round((order.gb || 0) * GB);
   const days = order.days || num(env, "duration_days");
@@ -1901,6 +2001,7 @@ async function handleAdminUICallback(c, cq, answer) {
     return renderAdmin(rows.length ? '<b>سفارش‌های قابل بررسی</b>' : 'سفارش نیازمند بررسی وجود ندارد.', kb(buttons));
   }
   if (d.startsWith("admin:wallet_review:")) {
+    delete st.card_order_review;
     const id=Number(d.slice("admin:wallet_review:".length)); if(!Number.isSafeInteger(id)||id<=0)return answer("شناسه نامعتبر است.",true);
     const order=await first(env, `SELECT * FROM orders WHERE id=? AND ${reviewOrderStatuses}`, id);
     if(!order)return answer("سفارش نیازمند بررسی پیدا نشد.",true);
@@ -1925,9 +2026,76 @@ async function handleAdminUICallback(c, cq, answer) {
       if (env.WEB_STATE && await first(env, "SELECT 1 FROM web_shop_receipts WHERE kind='order' AND reference=? AND expires_at>?", id, Date.now())) {
         buttons.push([btn('مشاهدهٔ رسید پرداخت', `web:receipt:order:${id}`)]);
       } else if (env.WEB_STATE) lines.push('تصویر رسید در دسترس نیست.');
+      buttons.push([btn('بررسی سرویس در پنل', `admin:card_check:${id}`)]);
+      buttons.push([btn('رد و بستن سفارش', `admin:card_reject:${id}`)]);
     }
     buttons.push([btn('بازگشت به سفارش‌های قابل بررسی', 'admin:wallet_reviews')]);
     return renderAdmin(lines.join('\n'), kb(buttons));
+  }
+  const cardAction = /^admin:card_(check|accept|retry|reject|apply):(\d+)(?::([a-f0-9]{16}))?$/.exec(d);
+  if (cardAction) {
+    const [, action, rawId, nonce] = cardAction;
+    if (!positiveId(rawId)) return answer('شناسهٔ سفارش معتبر نیست.', true);
+    const id = Number(rawId), back = `admin:wallet_review:${id}`;
+    const order = await first(env, `SELECT o.*,
+      (SELECT COALESCE(MAX(id),0) FROM store_card_review_actions WHERE order_id=o.id) AS review_version
+      FROM orders o WHERE o.id=? AND o.status='needs_review'
+      AND NOT EXISTS(SELECT 1 FROM wallet_payments WHERE order_id=o.id)`, id);
+    if (!order) return renderAdmin('این سفارش دیگر در انتظار بررسی کارت‌به‌کارت نیست.', adminBack('admin:wallet_reviews'));
+
+    const confirm = st.card_order_review;
+    if (action === 'apply' && (!nonce || confirm?.nonce !== nonce || confirm.id !== id || confirm.version !== order.review_version)) {
+      return renderAdmin('تأیید منقضی شده است. سفارش را دوباره بررسی کنید.', adminBack(back));
+    }
+    const selected = action === 'apply' ? confirm.action : action;
+    let evidence;
+    if (selected !== 'reject') {
+      try { evidence = await readCardOrderEvidence(env, order); }
+      catch (error) {
+        return renderAdmin(`بررسی سرویس کامل نشد. <code>${esc(String(error.message).slice(0, 220))}</code>`, adminBack(back));
+      }
+      if (selected === 'check') {
+        const { account } = evidence;
+        const detail = account
+          ? `حساب <code>${esc(account.email || order.service_name)}</code> در VPN-UI تأیید شد.\nسقف حجم فعلی: ${formatBytes(account.totalGB || 0)}\n${Number(account.expiryTime) > 0 ? `پایان فعلی: ${esc(adminTime(new Date(account.expiryTime).toISOString()))}` : 'پایان ثبت‌شده: بدون تاریخ ثابت'}`
+          : 'در فهرست کلاینت‌ها و ورودی‌های اولیه حسابی برای این سفارش پیدا نشد.';
+        const label = account ? (order.renew_service_id ? 'ثبت تمدید انجام‌شده' : 'ثبت سرویس موجود') : 'بازگرداندن به صف تأیید';
+        return renderAdmin(detail, kb([[btn(label, `admin:card_${evidence.action}:${id}`)], [btn('بازگشت به سفارش', back)]]));
+      }
+      if (selected !== evidence.action || (action === 'apply' && confirm.fingerprint !== JSON.stringify(evidence.fingerprint))) {
+        return renderAdmin('وضعیت سرویس تغییر کرده است. دوباره بررسی کنید.', adminBack(back));
+      }
+    }
+    if (action === 'apply') {
+      delete st.card_order_review;
+      if (!(await settleCardOrderReview(env, order, uid, selected, evidence))) {
+        return renderAdmin('وضعیت سفارش یا سرویس تغییر کرده است. دوباره بررسی کنید.', adminBack('admin:wallet_reviews'));
+      }
+      if (selected === 'retry') {
+        const rows = [[btn('تأیید و اجرای سفارش', `approve_${id}`)]];
+        if (env.WEB_STATE) rows.push([btn('صف فیش‌های در انتظار', 'web:orders')]);
+        rows.push([btn('سفارش‌های قابل بررسی', 'admin:wallet_reviews')]);
+        return renderAdmin('سفارش به صف تأیید برگشت. پس از کنترل پرداخت می‌توانید آن را اجرا کنید.', kb(rows));
+      }
+      try {
+        await sendMsg(env, order.user_id, selected === 'accept'
+          ? 'بررسی سفارش تکمیل شد. سرویس از «سرویس‌های من» قابل مشاهده است.'
+          : 'بررسی سفارش پایان یافت و سفارش رد شد. برای پیگیری وضعیت پرداخت با پشتیبانی تماس بگیرید.');
+      } catch {}
+      return renderAdmin(selected === 'accept' ? 'سفارش بر اساس وضعیت موجود پنل تأیید شد.'
+        : 'سفارش رد و بسته شد. وضعیت وجه از مسیر بانکی پیگیری می‌شود.', adminBack('admin:wallet_reviews'));
+    }
+
+    const confirmText = {
+      accept: order.renew_service_id
+        ? 'تأیید می‌کنید که همین تمدید در VPN-UI انجام شده است؟ با این کار فقط نتیجه در فروشگاه ثبت می‌شود.'
+        : 'سرویس موجود به این سفارش اختصاص پیدا کند و سفارش تأیید شود؟',
+      retry: 'تأیید می‌کنید که سرویس در VPN-UI ساخته نشده و پرداخت را بررسی کرده‌اید؟ سفارش برای تأیید جداگانه به صف برمی‌گردد.',
+      reject: 'سفارش رد و بسته شود؟ پیش از تأیید، وضعیت سرویس و وجه را بررسی کنید. برگشت وجه بانکی باید جداگانه انجام شود.',
+    }[selected];
+    const token = hex(8);
+    st.card_order_review = { id, version: order.review_version, action: selected, nonce: token, fingerprint: JSON.stringify(evidence?.fingerprint ?? null) };
+    return renderAdmin(confirmText, kb([[btn('تأیید', `admin:card_apply:${id}:${token}`)], [btn('انصراف', back)]]));
   }
   if (d.startsWith("admin:wallet_close:")) {
     const id=Number(d.slice("admin:wallet_close:".length));if(!Number.isSafeInteger(id)||id<=0)return answer("شناسه نامعتبر است.",true);
