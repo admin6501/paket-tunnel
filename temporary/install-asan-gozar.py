@@ -32,6 +32,8 @@ INCLUDE = f'include {SNIPPET};'
 REDIRECT = f'if ($host = {WWW}) {{ return 308 https://{DOMAIN}$request_uri; }}'
 TOKEN = re.compile(r'''#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\$\{[^}]+\}|[^\s{};#"']+|[{};]''')
 USERNAME = re.compile(r'[a-z][a-z0-9_]{2,31}')
+PAGE_NAMES = ('index.html', 'account.html', 'prices.html', 'services.html', 'network.html',
+              'status.html', 'faq.html', 'contact.html', 'favicon.svg')
 
 
 def owner_username():
@@ -125,7 +127,7 @@ def vhost_plan(files):
     root = Path(roots[0]).resolve()
     if not (root / 'index.html').is_file() or root in [Path('/'), Path('/var'), Path('/var/www'), Path('/var/lib')]:
         raise ValueError(f'Existing site index not found in expected root: {root}')
-    if any(part.startswith('/shop') or part in ('/index.html', '/account.html', '/prices.html')
+    if any(part.startswith('/shop') or part in tuple('/' + name for name in PAGE_NAMES)
            for loc in b['locations'] for part in loc):
         raise ValueError('An existing inline location conflicts with the store routes.')
     edits = {}
@@ -198,7 +200,7 @@ def get(url, *options):
 
 def api_matches(origin, options=()):
     for route, key, expected in [('state', 'signedIn', bool), ('notice', 'notice', (dict, type(None))),
-                                 ('featured', 'plans', list)]:
+                                 ('featured', 'plans', list), ('brand', 'name', str)]:
         body = get(f'{origin}/shop/api/{route}', *options)
         try:
             if not isinstance(json.loads(body)[key], expected):
@@ -218,20 +220,26 @@ def service_ready():
 
 def served_release(public, domain=DOMAIN, port=443):
     origin = f'https://{domain}:{port}'
-    files = {'/': 'index.html', '/account.html': 'account.html', '/prices.html': 'prices.html',
-             '/storefront.js': 'storefront.js', '/store.css': 'store.css'}
-    assets = {route: (public / name).read_bytes() for route, name in files.items()}
+    pages = {'/' + name: hashlib.sha256((public / name).read_bytes()).hexdigest().encode() for name in PAGE_NAMES}
+    pages['/'] = pages['/index.html']
+    assets = {f'/{name}': (public / name).read_bytes() for name in ('storefront.js', 'store.css', 'store.js')}
     failed = '/'
     loopback = ('--resolve', f'{domain}:{port}:127.0.0.1')
     for options in (loopback, (), loopback):
-        for route, expected in assets.items():
-            if get(origin + route, *options) != expected:
+        for route, expected in pages.items():
+            headers = get(origin + route, *options, '--head') or b''
+            if not re.search(rb'^x-store-template-sha256: *' + expected + rb'\r?$', headers, re.M | re.I):
                 failed = route
                 break
         else:
-            if api_matches(origin, options):
-                return
-            failed = '/shop/api/'
+            for route, expected in assets.items():
+                if get(origin + route, *options) != expected:
+                    failed = route
+                    break
+            else:
+                if api_matches(origin, options):
+                    return
+                failed = '/shop/api/'
         time.sleep(.5)
     raise RuntimeError(f'HTTPS did not serve the new release at {failed}. Check the active Nginx virtual host.')
 
@@ -260,7 +268,7 @@ def main(archive):
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
         required = [source / 'package-lock.json', *(public / name for name in (
-            'index.html', 'account.html', 'prices.html', 'store.js', 'store.css', 'prices.js', 'storefront.js', 'server-room.webp'))]
+            *PAGE_NAMES, 'store.js', 'store.css', 'prices.js', 'storefront.js', 'server-room.webp'))]
         if not all(path.is_file() for path in required):
             raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
@@ -308,6 +316,10 @@ def main(archive):
             run('install', '-m', '0640', '-o', 'root', '-g', group, str(settings), str(CONFIG))
         # Files are read-only to the service user. Existing database remains separate.
         shutil.copytree(source, APP, dirs_exist_ok=True)
+        site_pages = APP / 'site'
+        site_pages.mkdir(mode=0o755, exist_ok=True)
+        for name in PAGE_NAMES:
+            run('install', '-m', '0644', str(public / name), str(site_pages / name))
         APP.chmod(0o755)
         for item in APP.rglob('*'):
             if not item.is_symlink():

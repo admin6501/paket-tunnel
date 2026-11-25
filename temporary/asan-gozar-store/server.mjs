@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createStoreBackups } from './backups.mjs';
 import { openStore } from './database.mjs';
 import { listenForWebShop } from './http.mjs';
@@ -7,6 +8,7 @@ import { handleUpdate, recoverStorePayments, runBulkMigrations, runSubscriptionP
 import { isWebShopPath, pruneWebShop, webShopRequest } from './shop-api.js';
 import { deliverToInbox } from './inbox.js';
 import { processMessageJobs } from './messages.js';
+import { loadStorePages, webStorePage } from './site.mjs';
 
 process.umask(0o077);
 const config = JSON.parse(readFileSync(process.env.STORE_CONFIG || '/etc/asan-gozar-store/config.json', 'utf8'));
@@ -24,10 +26,14 @@ const tasks = new Set();
 let requests = 0;
 const backups = createStoreBackups(database, config.secret, () => store, replacement => { store = replacement; },
   () => requests === 1 && tasks.size === 0);
-const env = { STORE_SECRET: config.secret, WEB_SHOP_ORIGIN: origin.origin, WEB_SHOP_BACKUPS: backups };
+const pages = loadStorePages(process.env.STORE_WEB_PAGES || fileURLToPath(new URL('./site/', import.meta.url)));
+const env = { STORE_SECRET: config.secret, WEB_SHOP_ORIGIN: origin.origin, WEB_SHOP_BACKUPS: backups, WEB_STORE_PAGES: pages };
 const context = base => ({ ...base, DB: store.DB, OWNER_IDS: owners().map(row => row.id).join(',') });
 const app = async (request, base) => {
-  if (!isWebShopPath(new URL(request.url).pathname)) return new Response(null, { status: 404 });
+  const path = new URL(request.url).pathname;
+  const page = pages.get(path);
+  if (page) return webStorePage(request, page, { ...base, DB: store.DB });
+  if (!isWebShopPath(path)) return new Response(null, { status: 404 });
   requests++;
   try { return await webShopRequest(request, context(base), handleUpdate); }
   finally { requests--; }

@@ -102,3 +102,10 @@ body > main { flex: 1 0 auto; }
   .top .logo-mark { width: 2.15rem; height: 2.15rem; border-radius: .65rem; }
   .top .theme, .top .menu { min-width: 2.2rem; padding-inline: .3rem; }
 }
+
+.top .logo, .site-footer .logo { min-width: 0; }
+.top .logo-mark, .site-footer .logo-mark { flex-shrink: 0; }
+.top .logo > b, .site-footer .logo > b { max-width: min(35vw, 17rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 650px) {
+  .top .logo > b { max-width: min(26vw, 9rem); }
+}

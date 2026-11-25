@@ -7,7 +7,7 @@ export async function listenForWebShop(handler, env, port) {
   const server = createServer({ requestTimeout: 15_000 }, async (req, res) => {
     try {
       const url = new URL(req.url, env.WEB_SHOP_ORIGIN);
-      if (url.origin !== env.WEB_SHOP_ORIGIN || !isWebShopPath(url.pathname)) {
+      if (url.origin !== env.WEB_SHOP_ORIGIN || !(isWebShopPath(url.pathname) || env.WEB_STORE_PAGES?.has(url.pathname))) {
         res.writeHead(404).end();
         return;
       }

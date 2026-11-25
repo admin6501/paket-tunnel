@@ -8,6 +8,8 @@ import { listenForWebShop } from '../http.mjs';
 import { deliverToInbox } from '../inbox.js';
 import { processMessageJobs } from '../messages.js';
 import { panelURL } from '../panel-config.js';
+import { fileURLToPath } from 'node:url';
+import { loadStorePages, webStorePage } from '../site.mjs';
 
 const origin = 'https://store.example';
 const password = 'unique-long-test-password';
@@ -68,6 +70,54 @@ function browser(env, ip) {
 
 const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
 const image = Buffer.from(testJPEG).toString('base64');
+
+test('admin branding is quoted safely and published across every store page and icon', async t => {
+  const { env, sqlite } = await fixture(t);
+  const guest = browser(env, '192.0.2.92');
+  const admin = browser(env, '192.0.2.93');
+  const name = 'شبکهٔ «نوین» & "همراه"';
+  assert.equal((await guest.request('brand')).data.name, 'آسان‌گذر');
+  assert.equal((await guest.request('admin/brand', { name })).status, 401);
+  assert.equal((await guest.request('register', { name: 'Customer', username: 'buyer', password })).status, 200);
+  assert.equal((await guest.request('admin/brand', { name })).status, 403);
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  await admin.init();
+  await admin.press('admin:root');
+  await admin.press('admin:settings');
+  assert.ok(admin.buttons().includes('web:brand'));
+  assert.equal((await admin.request('admin/brand', { name: '<script>x</script>' })).status, 400);
+  assert.equal((await admin.request('admin/brand', { name }, 'https://other.example')).status, 403);
+  assert.deepEqual((await admin.request('admin/brand', { name })).data, { name });
+  assert.deepEqual((await guest.request('brand')).data, { name });
+  assert.equal(sqlite.prepare("SELECT value FROM settings WHERE key='website_brand'").get().value, name);
+
+  const pages = loadStorePages(fileURLToPath(new URL('../../asan-gozar_website/', import.meta.url)));
+  for (const [path, page] of pages) {
+    const response = await webStorePage(new Request(origin + path), page, env);
+    assert.equal(response.status, 200, path);
+    const markup = await response.text();
+    assert.doesNotMatch(markup, /آسان[‌ ]?گذر|>AG</u, path);
+    assert.equal(response.headers.get('x-store-template-sha256'), page.templateSha, path);
+    if (path === '/favicon.svg') {
+      assert.match(markup, />ش<\/text>/u);
+      continue;
+    }
+    assert.match(markup, /data-store-brand="شبکهٔ «نوین» &amp; &quot;همراه&quot;"/u, path);
+    assert.match(markup, /<title>[^<]*شبکهٔ «نوین» &amp; &quot;همراه&quot;/u, path);
+    assert.match(markup, /class="logo-mark" aria-hidden="true">ش<\/span>/u, path);
+    const structured = markup.match(/<script type="application\/ld\+json">(.*?)<\/script>/);
+    if (structured) assert.equal(JSON.parse(structured[1]).name, name, path);
+  }
+
+  const notice = { active: true, kind: 'notice', title: 'خبر {brand}', message: 'اطلاعیه آسان گذر' };
+  assert.equal((await admin.request('admin/notice', notice)).status, 200);
+  assert.deepEqual((await guest.request('notice')).data.notice, { ...notice, title: 'خبر ' + name, message: 'اطلاعیه ' + name });
+  sqlite.exec(`INSERT INTO store_categories(id,name,group_ids) VALUES(1,'اشتراک {brand}','[1]');
+    INSERT INTO plans VALUES('t1',10,70000,1);
+    INSERT INTO store_plan_specs VALUES('t1',1,30);`);
+  assert.equal((await guest.request('catalog')).data.plans[0].category, 'اشتراک ' + name);
+  assert.equal((await guest.request('featured')).data.plans[0].category, 'اشتراک ' + name);
+});
 
 test('the home page shows at most three active categories and their cheapest plans', async t => {
   const { sqlite, env } = await fixture(t);

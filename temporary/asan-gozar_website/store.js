@@ -8,6 +8,8 @@ const formats = new Set(['B','STRONG','I','EM','U','S','CODE','PRE','BR','A','BL
 const rtlDigits = '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
 const emoji = /\p{Emoji_Presentation}|\p{Extended_Pictographic}|[\uFE0E\uFE0F\u200D\u20E3\u{E0020}-\u{E007F}]/gu;
 const textOnly = value => value.replace(emoji, '');
+const siteBrand = document.documentElement.dataset.storeBrand;
+const displayText = value => textOnly(value).replace(/\{brand\}|آسان[\u200c\p{Zs}]?گذر/gu, () => siteBrand);
 const configLinks = new WeakMap();
 const number = new Intl.NumberFormat('fa-IR');
 let state = { signedIn: false, messages: [], revision: 0 };
@@ -53,7 +55,7 @@ function safeURL(value) {
 function link(text, href) {
   const anchor = document.createElement('a');
   anchor.href = href;
-  anchor.textContent = textOnly(text).trim();
+  anchor.textContent = displayText(text).trim();
   anchor.target = '_blank';
   anchor.rel = 'noopener noreferrer';
   return anchor;
@@ -64,7 +66,7 @@ function renderHTML(content, target) {
   template.innerHTML = content;
   const append = (node, parent) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      parent.append(document.createTextNode(textOnly(node.textContent)));
+      parent.append(document.createTextNode(parent.closest?.('code') ? textOnly(node.textContent) : displayText(node.textContent)));
       return;
     }
     if (node.nodeType !== Node.ELEMENT_NODE || ['SCRIPT','STYLE','IFRAME','SVG','MATH'].includes(node.tagName)) return;
@@ -143,8 +145,14 @@ function show(newState) {
         } else if (option.action) {
           const button = document.createElement('button');
           button.type = 'button';
-          button.textContent = textOnly(option.text).trim();
+          button.textContent = displayText(option.text).trim();
           button.addEventListener('click', () => {
+            if (option.action === 'web:brand') {
+              openAccountForm('brand-editor', 'brand-name', button);
+              get('brand-name').value = siteBrand;
+              get('brand-name').select();
+              return;
+            }
             if (option.action === 'web:notice') {
               void perform(async () => {
                 const { notice } = await api('admin/notice');
@@ -224,7 +232,8 @@ function closeAccountForms() {
   get('password-reset').hidden = true;
   get('backup-panel').hidden = true;
   get('notice-editor').hidden = true;
-  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form']) get(id).reset();
+  get('brand-editor').hidden = true;
+  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form', 'brand-form']) get(id).reset();
   resetTarget = null;
   panelTrigger = null;
 }
@@ -246,7 +255,14 @@ get('password-open').addEventListener('click', () => {
   openAccountForm('password-change', 'current-password', get('password-open'));
   get('password-open').setAttribute('aria-expanded', 'true');
 });
-for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel']) get(id).addEventListener('click', cancelAccountForm);
+for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel']) get(id).addEventListener('click', cancelAccountForm);
+get('brand-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    await api('admin/brand', { name: get('brand-name').value });
+    location.reload();
+  });
+});
 function setNoticeFields(notice) {
   get('notice-kind').value = notice.kind;
   get('notice-heading').value = notice.title;
@@ -305,7 +321,7 @@ get('backup-download').addEventListener('submit', event => {
       const objectURL = URL.createObjectURL(await response.blob());
       const download = document.createElement('a');
       download.href = objectURL;
-      download.download = /filename="(asan-gozar-[\d-]+\.agbackup)"/.exec(response.headers.get('Content-Disposition'))?.[1] || 'asan-gozar.agbackup';
+      download.download = /filename="(store-backup-[\d-]+\.agbackup)"/.exec(response.headers.get('Content-Disposition'))?.[1] || 'store-backup.agbackup';
       download.click();
       setTimeout(() => URL.revokeObjectURL(objectURL), 60_000);
       return 'نسخهٔ پشتیبان رمزنگاری‌شده آماده شد.';
