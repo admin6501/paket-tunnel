@@ -491,6 +491,7 @@ test('trial retries reuse the same credentials and admins can recover held older
     INSERT INTO settings(key,value) VALUES('test_category_id','1'),('sub_base_url','https://sub.example/sub/');
     INSERT INTO store_categories(id,name,group_ids) VALUES(1,'Trial group','1');`);
   const accounts = new Map();
+  const unprojected = [];
   const attempts = [];
   let phase = 'retry';
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -500,6 +501,7 @@ test('trial retries reuse the same credentials and admins can recover held older
     if (path === '/login') return Response.json({ success: true }, { headers: { 'set-cookie': 'vpn-ui=test' } });
     if (path.endsWith('/groups')) return Response.json({ success: true, obj: [{ id: 1, inboundIds: [3, 4] }] });
     if (path.endsWith('/assignable')) return Response.json({ success: true, obj: [{ inboundId: 3, protocol: 'vless' }, { inboundId: 4, protocol: 'vless' }] });
+    if (path.endsWith('/inbounds/get/3')) return Response.json({ success: true, obj: { settings: JSON.stringify({ clients: unprojected }) } });
     if (path.endsWith('/list')) {
       const account = accounts.get(target.searchParams.get('search'));
       return Response.json({ success: true, obj: { rows: account ? [account] : [], total: account ? 1 : 0 } });
@@ -566,6 +568,10 @@ test('trial retries reuse the same credentials and admins can recover held older
   sqlite.prepare('INSERT INTO test_claims VALUES(?,?)').run(legacy, 'review|2026-11-25 17:00');
   sqlite.prepare('INSERT INTO provision_attempts VALUES(?,?,?,?,?)').run(key, 'OldMissing', 'old-missing-sub', 3, '2026-11-25 17:00');
   sqlite.prepare('INSERT INTO settings VALUES(?,?)').run(`attempt_panel:${key}`, await panelAccountKey(env.PANEL_URL, env.PANEL_USER));
+  unprojected.push({ email: 'OldMissing' });
+  await review(legacy);
+  assert.ok(!admin.buttons().some(action => action.startsWith('admin:trial_release:')));
+  unprojected.pop();
   await review(legacy);
   await admin.press(`admin:trial_release:${legacy}:0123456789abcdef`);
   assert.equal(sqlite.prepare('SELECT 1 FROM test_claims WHERE user_id=?').get(legacy), undefined);
