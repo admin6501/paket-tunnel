@@ -188,7 +188,7 @@ export async function webShopRequest(request, env, update) {
   const value = cookieValue(request, SESSION_COOKIE);
   const sessionKey = TOKEN.test(value || '') ? await hash(value) : '';
   const session = sessionKey && await first(env, 'SELECT * FROM web_shop_sessions WHERE token=? AND expires_at>?', sessionKey, now);
-  if (!session) return route === 'state' && request.method === 'GET' ? json({ signedIn: false }) : json({ error: 'دوباره وارد شوید.' }, 401);
+  if (!session) return ['state','session'].includes(route) && request.method === 'GET' ? json({ signedIn: false }) : json({ error: 'دوباره وارد شوید.' }, 401);
   if (route === 'logout' && request.method === 'POST') {
     await run(env, 'UPDATE web_shop_sessions SET expires_at=? WHERE token=?', now, sessionKey);
     return json({ signedIn: false }, 200, [cookie(SESSION_COOKIE, '', 0)]);
@@ -200,6 +200,7 @@ export async function webShopRequest(request, env, update) {
     return json({ error: blocked ? 'دسترسی حساب مسدود شده است.' : 'سطح دسترسی حساب تغییر کرده است. دوباره وارد شوید.' }, 401,
       [cookie(SESSION_COOKIE, '', 0)]);
   }
+  if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
   if (route === 'inbox' && request.method === 'GET') {
     const before = Number(url.searchParams.get('before') || Number.MAX_SAFE_INTEGER);

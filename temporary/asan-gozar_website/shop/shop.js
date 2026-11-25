@@ -74,6 +74,7 @@ function renderHTML(content, target) {
 
 function show(newState) {
   state = newState;
+  document.dispatchEvent(new CustomEvent('shop:session', { detail: { signedIn: state.signedIn } }));
   get('login').hidden = state.signedIn;
   get('account').hidden = !state.signedIn;
   if (!state.signedIn) {

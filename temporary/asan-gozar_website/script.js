@@ -7,6 +7,21 @@
   const menuButton = $('menuToggle');
   const nav = $('mainNav');
 
+  const accountLink = $('siteAccount');
+  const syncAccount = signedIn => {
+    if (accountLink) accountLink.textContent = signedIn ? 'حساب من' : 'ورود به حساب';
+  };
+  if (body.classList.contains('shop-page')) {
+    document.addEventListener('shop:session', event => syncAccount(event.detail.signedIn));
+  } else if (accountLink) {
+    window.addEventListener('pageshow', async () => {
+      try {
+        const response = await fetch(new URL('shop/api/session', document.baseURI), { cache: 'no-store' });
+        syncAccount(response.ok && (await response.json()).signedIn === true);
+      } catch { syncAccount(false); }
+    });
+  }
+
   // تم انتخابی بین بازدیدها حفظ می‌شود.
   try {
     if (localStorage.getItem('ag-theme') === 'light') body.classList.add('light');

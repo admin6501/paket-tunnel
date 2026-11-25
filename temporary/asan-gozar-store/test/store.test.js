@@ -78,6 +78,7 @@ test('standalone signup, local admin role, session rotation and private support 
   assert.equal((await guest.request('register', {name:'Customer',username:'buyer',password,owner:true})).status, 200);
   await guest.init();
   assert.ok(guest.buttons().includes('buy'));
+  assert.deepEqual((await guest.request('session')).data, { signedIn: true });
   assert.ok(!guest.buttons().includes('admin:root'));
   assert.equal(sqlite.prepare("SELECT owner FROM store_accounts WHERE username='buyer'").get().owner, 0);
   assert.equal((await guest.request('action',{kind:'button',action:'admin:root',revision:guest.state.revision})).status, 400);
@@ -105,6 +106,7 @@ test('standalone signup, local admin role, session rotation and private support 
 
   const replacement = browser(env,'192.0.2.12');
   assert.equal((await replacement.request('login',{username:'buyer',password})).status,200);
+  assert.deepEqual((await guest.request('session')).data, { signedIn: false });
   assert.equal((await guest.request('inbox')).status,401);
   await replacement.init();
   sqlite.prepare('UPDATE store_profiles SET blocked=1 WHERE user_id=?').run(customerId);

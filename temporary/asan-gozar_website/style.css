@@ -65,3 +65,5 @@ button{cursor:pointer}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 
 .nav .shop-link{color:var(--cyan);font-weight:800}
+
+@media (min-width:651px) and (max-width:1050px){.top .nav{flex-wrap:wrap;justify-content:center;column-gap:12px;row-gap:4px;margin-inline:12px}}
