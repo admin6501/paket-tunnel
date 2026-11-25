@@ -23,6 +23,9 @@ function syncPath(path) {
 
 function removeSessions(sqlite) {
   sqlite.exec('DELETE FROM web_shop_sessions; DELETE FROM web_shop_limits;');
+  if (sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE name='store_push_subscriptions'").get()) {
+    sqlite.exec('DELETE FROM store_push_jobs; DELETE FROM store_push_subscriptions;');
+  }
   if (sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE name='store_ticket_images'").get()) {
     return sqlite.prepare('DELETE FROM store_ticket_images WHERE message_id IS NULL').run().changes > 0;
   }

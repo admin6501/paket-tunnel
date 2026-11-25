@@ -33,7 +33,8 @@ REDIRECT = f'if ($host = {WWW}) {{ return 308 https://{DOMAIN}$request_uri; }}'
 TOKEN = re.compile(r'''#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\$\{[^}]+\}|[^\s{};#"']+|[{};]''')
 USERNAME = re.compile(r'[a-z][a-z0-9_]{2,31}')
 PAGE_NAMES = ('index.html', 'account.html', 'prices.html', 'services.html', 'network.html',
-              'status.html', 'faq.html', 'contact.html', 'favicon.svg')
+              'status.html', 'faq.html', 'contact.html', 'favicon.svg', 'app.webmanifest')
+APP_ASSETS = ('app-install.js', 'app-worker.js', 'app-icon-180.png', 'app-icon-192.png', 'app-icon-512.png')
 
 
 def owner_username():
@@ -222,7 +223,7 @@ def served_release(public, domain=DOMAIN, port=443):
     origin = f'https://{domain}:{port}'
     pages = {'/' + name: hashlib.sha256((public / name).read_bytes()).hexdigest().encode() for name in PAGE_NAMES}
     pages['/'] = pages['/index.html']
-    assets = {f'/{name}': (public / name).read_bytes() for name in ('storefront.js', 'store.css', 'store.js', 'tickets.js')}
+    assets = {f'/{name}': (public / name).read_bytes() for name in ('storefront.js', 'store.css', 'store.js', 'tickets.js', *APP_ASSETS)}
     failed = '/'
     loopback = ('--resolve', f'{domain}:{port}:127.0.0.1')
     for options in (loopback, (), loopback):
@@ -268,7 +269,7 @@ def main(archive):
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
         required = [source / 'package-lock.json', *(public / name for name in (
-            *PAGE_NAMES, 'store.js', 'store.css', 'prices.js', 'storefront.js', 'tickets.js', 'server-room.webp'))]
+            *PAGE_NAMES, *APP_ASSETS, 'store.js', 'store.css', 'prices.js', 'storefront.js', 'tickets.js', 'server-room.webp'))]
         if not all(path.is_file() for path in required):
             raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
