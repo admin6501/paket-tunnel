@@ -1,5 +1,6 @@
 import { checkPassword, hashPassword, validPassword, validUsername } from './auth.js';
 import { deliverToInbox } from './inbox.js';
+import { BACKUP_LIMIT, BackupError } from './backups.mjs';
 
 const PREFIX = '/shop/api/';
 const SESSION_COOKIE = '__Host-ag-session';
@@ -31,9 +32,8 @@ async function limited(env, key, maximum) {
   return row.hits > maximum;
 }
 
-async function readBody(request) {
-  if (!/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || '') || !request.body) return null;
-  if (Number(request.headers.get('content-length')) > BODY_LIMIT) return null;
+async function readBytes(request, maximum) {
+  if (!request.body || Number(request.headers.get('content-length')) > maximum) return null;
   const reader = request.body.getReader();
   const chunks = [];
   let size = 0;
@@ -42,12 +42,21 @@ async function readBody(request) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > BODY_LIMIT) { await reader.cancel(); return null; }
+      if (size > maximum) { await reader.cancel(); return null; }
       chunks.push(value);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  } catch { return null; }
+}
+
+async function readBody(request) {
+  if (!/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || '')) return null;
+  const bytes = await readBytes(request, BODY_LIMIT);
+  if (!bytes) return null;
+  try {
     const body = JSON.parse(new TextDecoder().decode(bytes));
     return body && typeof body === 'object' && !Array.isArray(body) ? body : null;
   } catch { return null; }
@@ -113,6 +122,85 @@ async function changePassword(request, env, session) {
   ]);
   if (!saved.meta.changes) return json({ error: 'وضعیت حساب تغییر کرده است. دوباره تلاش کنید.' }, 409);
   return json({ signedIn: false }, 200, [cookie(SESSION_COOKIE, '', 0)]);
+}
+
+async function verifyCurrentPassword(env, session, password) {
+  const account = await first(env, 'SELECT salt,password_hash FROM store_accounts WHERE id=?', session.user_id);
+  try {
+    if (await checkPassword(password, account)) return account;
+  } catch { throw new BackupError('دوباره تلاش کنید.', 503); }
+  throw new BackupError('رمز فعلی درست نیست.', 403);
+}
+
+async function resetCustomerPassword(request, env, session) {
+  if (await limited(env, `password-reset:${session.user_id}`, 5)) {
+    return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
+  }
+  const body = await readBody(request);
+  if (!Number.isSafeInteger(body?.userId) || body.userId <= 0 || !validPassword(body?.currentPassword) ||
+      !validPassword(body?.newPassword) || body.currentPassword === body.newPassword) {
+    return json({ error: 'شناسه و رمزها را بررسی کنید. رمز جدید دست‌کم ۱۴ نویسه باشد.' }, 400);
+  }
+  const customer = await first(env, 'SELECT salt FROM store_accounts WHERE id=?', body.userId);
+  if (!customer || await isAdmin(env, body.userId)) return json({ error: 'حساب کاربر برای بازنشانی در دسترس نیست.' }, 403);
+  let actor, replacement;
+  try {
+    actor = await verifyCurrentPassword(env, session, body.currentPassword);
+    replacement = await hashPassword(body.newPassword);
+  } catch (error) {
+    return json({ error: error instanceof BackupError ? error.message : 'بازنشانی رمز موقتاً امکان‌پذیر نیست.' }, error.status || 503);
+  }
+  const now = Date.now();
+  const [changed] = await env.DB.batch([
+    env.DB.prepare(`UPDATE store_accounts SET salt=?,password_hash=? WHERE id=? AND salt=? AND owner=0
+      AND NOT EXISTS(SELECT 1 FROM admins WHERE user_id=store_accounts.id)
+      AND NOT EXISTS(SELECT 1 FROM web_shop_sessions WHERE user_id=store_accounts.id AND busy_until>?)
+      AND EXISTS(SELECT 1 FROM web_shop_sessions s JOIN store_accounts a ON a.id=s.user_id
+        WHERE s.token=? AND s.expires_at>? AND a.salt=?
+        AND (a.owner=1 OR EXISTS(SELECT 1 FROM admins WHERE user_id=a.id)))`)
+      .bind(replacement.salt, replacement.password_hash, body.userId, customer.salt, now, session.token, now, actor.salt),
+    env.DB.prepare(`DELETE FROM web_shop_sessions WHERE user_id=?
+      AND EXISTS(SELECT 1 FROM store_accounts WHERE id=web_shop_sessions.user_id AND salt=?)`)
+      .bind(body.userId, replacement.salt),
+  ]);
+  return changed.meta.changes ? json({ ok: true }) : json({ error: 'وضعیت حساب تغییر کرده است. دوباره تلاش کنید.' }, 409);
+}
+
+async function manageBackup(route, request, env, session) {
+  const backups = env.WEB_SHOP_BACKUPS;
+  if (!backups) return json({ error: 'پشتیبان‌گیری در دسترس نیست.' }, 503);
+  const activeOwner = salt => first(env, `SELECT 1 FROM store_accounts a JOIN web_shop_sessions s ON s.user_id=a.id
+    WHERE a.owner=1 AND s.token=? AND s.expires_at>? AND (? IS NULL OR a.salt=?)`, session.token, Date.now(), salt, salt);
+  try {
+    if (route === 'backup/restore') {
+      if (request.headers.get('content-type') !== 'application/octet-stream') {
+        return json({ error: 'فایل نسخهٔ پشتیبان را انتخاب کنید.' }, 400);
+      }
+      if (!backups.consumeTicket(request.headers.get('x-asan-gozar-restore-key'), session)) {
+        return json({ error: 'مجوز بازیابی منقضی شده است. دوباره تأیید کنید.' }, 403);
+      }
+      const data = await readBytes(request, BACKUP_LIMIT);
+      if (!data) return json({ error: 'فایل معتبر نیست یا از ۶۴ مگابایت بزرگ‌تر است.' }, 413);
+      if (!(await activeOwner(null))) return json({ error: 'دوباره وارد شوید.' }, 401);
+      backups.restore(data, session.user_id);
+      return json({ signedIn: false }, 200, [cookie(SESSION_COOKIE, '', 0)]);
+    }
+    if (await limited(env, `backup:${session.user_id}`, 6)) return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
+    const body = await readBody(request);
+    if (!validPassword(body?.currentPassword)) return json({ error: 'رمز فعلی را وارد کنید.' }, 400);
+    const owner = await verifyCurrentPassword(env, session, body.currentPassword);
+    if (!(await activeOwner(owner.salt))) return json({ error: 'دوباره وارد شوید.' }, 401);
+    if (route === 'backup/authorize-restore') return json({ ticket: backups.issueTicket(session) });
+    return new Response(backups.download(), { headers: {
+      'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Content-Disposition': `attachment; filename="asan-gozar-${new Date().toISOString().slice(0, 10)}.agbackup"`,
+    } });
+  } catch (error) {
+    if (error instanceof BackupError) return json({ error: error.message }, error.status);
+    console.error('Store backup operation failed:', error.code || error.name);
+    return json({ error: 'عملیات پشتیبان‌گیری کامل نشد. دوباره تلاش کنید.' }, 500);
+  }
 }
 
 export async function webShopReview(env, uid, action) {
@@ -196,8 +284,9 @@ export async function webShopRequest(request, env, update) {
       if (route === 'login') passwordOK = await checkPassword(body.password, account);
       else {
         const hashed = await hashPassword(body.password);
-        const created = await first(env, `INSERT INTO store_accounts(username,display_name,salt,password_hash,created_at)
-          VALUES(?,?,?,?,?) ON CONFLICT(username) DO NOTHING RETURNING id,username,display_name,salt`,
+        const created = await first(env, `INSERT INTO store_accounts(id,username,display_name,salt,password_hash,created_at)
+          SELECT MAX(COALESCE(MAX(id),0),COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='store_account_id_floor'),0))+1,
+          ?,?,?,?,? FROM store_accounts WHERE 1 ON CONFLICT(username) DO NOTHING RETURNING id,username,display_name,salt`,
           username, display, hashed.salt, hashed.password_hash, now);
         if (!created) return json({ error: 'این نام کاربری در دسترس نیست.' }, 409);
         account = created;
@@ -238,8 +327,13 @@ export async function webShopRequest(request, env, update) {
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
-  if (route === 'password' && request.method === 'POST') {
-    return admin ? changePassword(request, env, session) : json({ error: 'دسترسی ندارید.' }, 403);
+  if (route === 'password' && request.method === 'POST') return changePassword(request, env, session);
+  if (route === 'admin/password' && request.method === 'POST') {
+    return admin ? resetCustomerPassword(request, env, session) : json({ error: 'دسترسی ندارید.' }, 403);
+  }
+  if (['backup/download','backup/authorize-restore','backup/restore'].includes(route) && request.method === 'POST') {
+    const owner = admin && await first(env, 'SELECT 1 FROM store_accounts WHERE id=? AND owner=1', session.user_id);
+    return owner ? manageBackup(route, request, env, session) : json({ error: 'این بخش مخصوص مدیر اصلی است.' }, 403);
   }
   if (route === 'inbox' && request.method === 'GET') {
     const before = Number(url.searchParams.get('before') || Number.MAX_SAFE_INTEGER);
@@ -268,7 +362,8 @@ export async function webShopRequest(request, env, update) {
   if (await limited(env, `actor:${session.user_id}`, 30)) return json({ error: 'لطفاً کمی صبر کنید.' }, 429);
   const body = await readBody(request);
   if (!body || body.revision !== session.revision) return json({ error: 'صفحه را تازه کنید.' }, 409);
-  const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action);
+  const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action)
+    .filter(action => action !== 'web:backup' && !action?.startsWith('web:reset_password:'));
   const state = JSON.parse(session.state_json);
   const image = body.kind === 'image' && validImage(body.image);
   const input = publicState(session).input;

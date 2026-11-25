@@ -95,11 +95,11 @@
           <button type="button" id="home" class="secondary">منوی فروشگاه</button>
           <button type="button" id="inbox-open" class="secondary">صندوق پیام</button>
           <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
-          <button type="button" id="password-open" class="secondary" hidden aria-controls="password-change" aria-expanded="false">تغییر رمز عبور</button>
+          <button type="button" id="password-open" class="secondary" aria-controls="password-change" aria-expanded="false">تغییر رمز عبور</button>
           <button type="button" id="logout" class="secondary logout">خروج</button>
         </div>
         <section id="password-change" hidden aria-labelledby="password-title">
-          <h3 id="password-title">تغییر رمز عبور مدیر</h3>
+          <h3 id="password-title">تغییر رمز عبور حساب</h3>
           <p>رمز جدید دست‌کم ۱۴ نویسه داشته باشد. پس از ذخیره، دوباره وارد حساب شوید.</p>
           <form id="password-form" class="auth-form">
             <div>
@@ -119,6 +119,56 @@
               <button type="button" id="password-cancel" class="secondary">انصراف</button>
             </div>
           </form>
+        </section>
+        <section id="password-reset" hidden aria-labelledby="reset-title">
+          <h3 id="reset-title">بازنشانی رمز کاربر</h3>
+          <p id="reset-user"></p>
+          <form id="reset-form" class="auth-form">
+            <div>
+              <label for="reset-admin-password">رمز فعلی حساب مدیر</label>
+              <input id="reset-admin-password" dir="ltr" type="password" autocomplete="current-password" required>
+            </div>
+            <div>
+              <label for="reset-new-password">رمز جدید کاربر</label>
+              <input id="reset-new-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+            </div>
+            <div>
+              <label for="reset-repeat-password">تکرار رمز جدید کاربر</label>
+              <input id="reset-repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+            </div>
+            <div class="actions">
+              <button type="submit">ذخیره و خروج کاربر از حساب</button>
+              <button type="button" id="reset-cancel" class="secondary">انصراف</button>
+            </div>
+          </form>
+        </section>
+        <section id="backup-panel" hidden aria-labelledby="backup-title">
+          <h3 id="backup-title">پشتیبان‌گیری و بازیابی فروشگاه</h3>
+          <p>فایل رمزنگاری‌شده شامل حساب‌ها، سفارش‌ها، کیف پول، بسته‌ها و تنظیمات فروشگاه است. برای بازیابی به همین کلید نصب نیاز است.</p>
+          <div class="backup-forms">
+            <form id="backup-download" class="auth-form">
+              <h4>دانلود نسخهٔ پشتیبان</h4>
+              <div>
+                <label for="backup-password">رمز فعلی مدیر اصلی</label>
+                <input id="backup-password" dir="ltr" type="password" autocomplete="current-password" required>
+              </div>
+              <div class="actions"><button type="submit">دانلود فایل پشتیبان</button></div>
+            </form>
+            <form id="backup-restore" class="auth-form">
+              <h4>بازیابی نسخهٔ پشتیبان</h4>
+              <p>بازیابی، داده‌های فعلی فروشگاه را جایگزین می‌کند و همه حساب‌ها را خارج می‌کند. تغییرات پنل VPN جداگانه پیگیری می‌شوند.</p>
+              <div>
+                <label for="backup-file">فایل پشتیبان، حداکثر ۶۴ مگابایت</label>
+                <input id="backup-file" type="file" accept=".agbackup" required>
+              </div>
+              <div>
+                <label for="restore-password">رمز فعلی مدیر اصلی</label>
+                <input id="restore-password" dir="ltr" type="password" autocomplete="current-password" required>
+              </div>
+              <div class="actions"><button type="submit">جایگزینی داده‌های فعلی</button></div>
+            </form>
+          </div>
+          <button type="button" id="backup-close" class="secondary">بازگشت به پنل</button>
         </section>
         <section id="inbox" hidden aria-labelledby="inbox-title">
           <h2 id="inbox-title">صندوق پیام سایت</h2>

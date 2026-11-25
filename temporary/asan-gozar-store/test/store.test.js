@@ -98,7 +98,7 @@ test('password rotation verifies the administrator and invalidates the existing 
   const update = { currentPassword: password, newPassword: replacement };
   assert.equal((await guest.request('password', update)).status, 401);
   assert.equal((await guest.request('register', { name: 'Customer', username: 'buyer', password })).status, 200);
-  assert.equal((await guest.request('password', update)).status, 403);
+  assert.equal((await guest.request('admin/password', update)).status, 403);
   assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
   assert.equal((await admin.request('state')).data.admin, true);
   assert.equal((await admin.request('password', update, 'https://other.example')).status, 403);
@@ -114,6 +114,32 @@ test('password rotation verifies the administrator and invalidates the existing 
   assert.equal((await admin.request('login', { username: 'owner', password })).status, 401);
   assert.equal((await admin.request('login', { username: 'owner', password: replacement })).status, 200);
   assert.equal((await admin.request('state')).data.admin, true);
+});
+
+test('customers change their own passwords and administrators reset only customer passwords', async t => {
+  const { sqlite, env, owner } = await fixture(t);
+  const customer = browser(env, '192.0.2.84');
+  const admin = browser(env, '192.0.2.85');
+  const changed = 'customer-changed-test-password';
+  const reset = 'administrator-reset-test-password';
+  assert.equal((await customer.request('register', { name: 'Customer', username: 'buyer', password })).status, 200);
+  const { id: userId } = sqlite.prepare("SELECT id FROM store_accounts WHERE username='buyer'").get();
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  await admin.init();
+  await admin.press('admin:root');
+  await admin.press('admin:users:0');
+  await admin.press(`admin:user:${userId}`);
+  assert.ok(admin.buttons().includes(`web:reset_password:${userId}`));
+  assert.equal((await customer.request('password', { currentPassword: password, newPassword: changed })).status, 200);
+  assert.equal((await customer.request('login', { username: 'buyer', password })).status, 401);
+  assert.equal((await customer.request('login', { username: 'buyer', password: changed })).status, 200);
+  assert.equal((await admin.request('admin/password', { userId: owner.id, currentPassword: password, newPassword: reset })).status, 403);
+  assert.equal((await admin.request('admin/password', { userId, currentPassword: 'incorrect-long-test-password', newPassword: reset })).status, 403);
+  assert.equal((await admin.request('admin/password', { userId, currentPassword: password, newPassword: reset })).status, 200);
+  assert.deepEqual((await customer.request('session')).data, { signedIn: false });
+  assert.equal((await customer.request('login', { username: 'buyer', password: changed })).status, 401);
+  assert.equal((await customer.request('login', { username: 'buyer', password: reset })).status, 200);
+  assert.equal((await admin.request('session')).data.signedIn, true);
 });
 
 test('standalone signup, local admin role, session rotation and private support inbox', async t => {

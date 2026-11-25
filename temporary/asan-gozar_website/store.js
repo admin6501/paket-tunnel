@@ -15,26 +15,32 @@ let busy = false;
 let registering = false;
 let nextMessage = null;
 let newestMessage = null;
+let resetTarget = null;
+let panelTrigger = null;
 
 function announce(text = '', error = false) {
   status.textContent = text;
   status.classList.toggle('error', error);
 }
 
-async function api(route, body) {
+const jsonRequest = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+async function shopFetch(route, options) {
   const response = await fetch(new URL(route, base), {
     credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(180_000),
-    ...(body === undefined ? {} : {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    }),
+    ...options,
   });
-  const result = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
     const error = new Error(result.error || 'ارتباط با فروشگاه برقرار نشد.');
     error.status = response.status;
     throw error;
   }
-  return result;
+  return response;
+}
+
+async function api(route, body) {
+  return (await shopFetch(route, body === undefined ? {} : jsonRequest(body))).json();
 }
 
 function safeURL(value) {
@@ -87,8 +93,7 @@ function show(newState) {
   document.dispatchEvent(new CustomEvent('shop:session', { detail: { signedIn: state.signedIn } }));
   get('login').hidden = state.signedIn;
   get('account').hidden = !state.signedIn;
-  get('password-open').hidden = !state.admin;
-  closePasswordForm();
+  closeAccountForms();
   if (!state.signedIn) {
     messages.replaceChildren();
     reply.reset();
@@ -140,6 +145,14 @@ function show(newState) {
           button.type = 'button';
           button.textContent = textOnly(option.text).trim();
           button.addEventListener('click', () => {
+            if (option.action === 'web:backup') return openAccountForm('backup-panel', 'backup-password', button);
+            const target = /^web:reset_password:(\d+)$/.exec(option.action);
+            if (target) {
+              openAccountForm('password-reset', 'reset-admin-password', button);
+              resetTarget = Number(target[1]);
+              get('reset-user').textContent = `شناسهٔ کاربر ${number.format(resetTarget)}. بعد از ذخیره، کاربر با رمز جدید وارد می‌شود.`;
+              return;
+            }
             if (/^(wallet:pay:|approve_|topup:(approve|reject):|loc:go:)/.test(option.action) &&
                 !window.confirm(button.textContent + '؟')) return;
             void perform(() => action({ kind: 'button', action: option.action }));
@@ -235,21 +248,34 @@ async function loadCatalog() {
   }
 }
 
-function closePasswordForm() {
+function closeAccountForms() {
   get('password-change').hidden = true;
   get('password-open').setAttribute('aria-expanded', 'false');
-  get('password-form').reset();
+  get('password-reset').hidden = true;
+  get('backup-panel').hidden = true;
+  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore']) get(id).reset();
+  resetTarget = null;
+  panelTrigger = null;
+}
+
+function openAccountForm(section, input, trigger) {
+  closeAccountForms();
+  panelTrigger = trigger;
+  get(section).hidden = false;
+  get(input).focus();
+}
+
+function cancelAccountForm() {
+  const trigger = panelTrigger;
+  closeAccountForms();
+  trigger?.focus();
 }
 
 get('password-open').addEventListener('click', () => {
-  get('password-change').hidden = false;
+  openAccountForm('password-change', 'current-password', get('password-open'));
   get('password-open').setAttribute('aria-expanded', 'true');
-  get('current-password').focus();
 });
-get('password-cancel').addEventListener('click', () => {
-  closePasswordForm();
-  get('password-open').focus();
-});
+for (const id of ['password-cancel', 'reset-cancel', 'backup-close']) get(id).addEventListener('click', cancelAccountForm);
 get('password-form').addEventListener('submit', event => {
   event.preventDefault();
   void perform(async () => {
@@ -260,6 +286,56 @@ get('password-form').addEventListener('submit', event => {
       show(await api('password', { currentPassword, newPassword }));
       return 'رمز عبور تغییر کرد. با رمز جدید وارد شوید.';
     } finally { get('current-password').value = ''; }
+  });
+});
+
+get('reset-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    const current = get('reset-admin-password');
+    const newPassword = get('reset-new-password').value;
+    if (newPassword !== get('reset-repeat-password').value) throw new Error('رمز جدید و تکرار آن یکسان نیستند.');
+    try {
+      await api('admin/password', { userId: resetTarget, currentPassword: current.value, newPassword });
+      closeAccountForms();
+      return 'رمز کاربر بازنشانی شد و نشست قبلی او بسته شد.';
+    } finally { current.value = ''; }
+  });
+});
+
+get('backup-download').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    const password = get('backup-password');
+    try {
+      const response = await shopFetch('backup/download', jsonRequest({ currentPassword: password.value }));
+      const objectURL = URL.createObjectURL(await response.blob());
+      const download = document.createElement('a');
+      download.href = objectURL;
+      download.download = /filename="(asan-gozar-[\d-]+\.agbackup)"/.exec(response.headers.get('Content-Disposition'))?.[1] || 'asan-gozar.agbackup';
+      download.click();
+      setTimeout(() => URL.revokeObjectURL(objectURL), 60_000);
+      return 'نسخهٔ پشتیبان رمزنگاری‌شده آماده شد.';
+    } finally { password.value = ''; }
+  });
+});
+
+get('backup-restore').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!window.confirm('داده‌های فعلی فروشگاه با داده‌های این فایل جایگزین شوند؟')) return;
+  void perform(async () => {
+    const password = get('restore-password');
+    const file = get('backup-file').files[0];
+    try {
+      if (!file || file.size > 64 * 1024 ** 2) throw new Error('فایل پشتیبان حداکثر ۶۴ مگابایت باشد.');
+      const { ticket } = await api('backup/authorize-restore', { currentPassword: password.value });
+      const response = await shopFetch('backup/restore', {
+        method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream', 'X-Asan-Gozar-Restore-Key': ticket },
+      });
+      show(await response.json());
+      void loadCatalog();
+      return 'داده‌های فروشگاه بازیابی شدند. دوباره وارد شوید.';
+    } finally { password.value = ''; }
   });
 });
 
@@ -308,7 +384,7 @@ get('auth').addEventListener('submit', event => {
 });
 
 async function loadInbox(more = false) {
-  closePasswordForm();
+  closeAccountForms();
   const { messages: entries, next } = await api(more ? `inbox?before=${nextMessage}` : 'inbox');
   get('inbox').hidden = false;
   messages.hidden = true;
