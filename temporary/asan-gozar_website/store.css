@@ -162,3 +162,15 @@ body.light #status.error { color: #a42234; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
 }
+
+.featured-store { margin-block: 2rem clamp(3rem, 7vw, 5rem); }
+.featured-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; }
+.featured-card {
+  display: grid; justify-items: start; gap: .3rem; padding: 1.25rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 1rem;
+}
+.featured-card:hover { border-color: var(--cyan); }
+.featured-card h3 { font-size: 1.05rem; margin: 0; }
+.featured-card strong { font-size: 1.15rem; color: var(--cyan); }
+.featured-card span, #featured-status { color: var(--muted); font-size: .92rem; }
+#featured-status:empty { display: none; }

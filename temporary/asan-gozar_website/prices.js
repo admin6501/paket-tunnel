@@ -55,7 +55,7 @@
       const response = await fetch('/shop/api/catalog', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
       if (!response.ok) throw new Error('Catalog unavailable');
       const { plans } = await response.json();
-      const previous = category.value;
+      const previous = category.value || new URLSearchParams(location.search).get('category');
       categories.clear();
       for (const plan of plans) {
         const id = String(plan.categoryId);

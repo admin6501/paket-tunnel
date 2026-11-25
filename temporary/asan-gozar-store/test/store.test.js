@@ -69,6 +69,20 @@ function browser(env, ip) {
 const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
 const image = Buffer.from(testJPEG).toString('base64');
 
+test('the home page shows at most three active categories and their cheapest plans', async t => {
+  const { sqlite, env } = await fixture(t);
+  sqlite.exec(`INSERT INTO store_categories(id,name,group_ids,active) VALUES
+    (1,'Personal','[1]',1),(2,'Hidden','[2]',0),(3,'Pro','[3]',1),(4,'Fourth','[4]',1),(5,'Fifth','[5]',1);
+    INSERT INTO plans(key,gb,price,sort) VALUES
+    ('expensive',50,90000,1),('cheap',10,30000,2),('hidden',10,1,3),('third',1,40000,4),('fourth',1,20000,5),('fifth',1,10000,6);
+    INSERT INTO store_plan_specs(plan_key,category_id,days) VALUES
+    ('expensive',1,60),('cheap',1,30),('hidden',2,30),('third',3,30),('fourth',4,30),('fifth',5,30);`);
+  const guest = browser(env, '192.0.2.89');
+  const { status, data } = await guest.request('featured');
+  assert.equal(status, 200);
+  assert.deepEqual(data.plans.map(({ categoryId, price }) => [categoryId, price]), [[1, 30000], [3, 40000], [4, 20000]]);
+});
+
 test('the optional public notice can only be edited by a store admin', async t => {
   const { env } = await fixture(t);
   const guest = browser(env, '192.0.2.90');
