@@ -577,6 +577,56 @@ test('trial retries reuse the same credentials and admins can recover held older
   assert.equal(sqlite.prepare('SELECT 1 FROM test_claims WHERE user_id=?').get(legacy), undefined);
 });
 
+test('order review includes older card purchases and refunded wallet payments', async t => {
+  const { sqlite, env } = await fixture(t);
+  const buyer = browser(env, '192.0.2.158'), admin = browser(env, '192.0.2.159');
+  await buyer.request('register', { username: 'order_buyer', name: 'Buyer', password });
+  const userId = sqlite.prepare("SELECT id FROM store_accounts WHERE username='order_buyer'").get().id;
+  const order = sqlite.prepare('INSERT INTO orders(user_id,service_name,final_price,status,created_at) VALUES (?,?,?,?,?) RETURNING id');
+  const original = order.get(userId, 'OldCard', 70000, 'needs_review', '2026-10-11 16:15').id;
+  sqlite.prepare('INSERT INTO provision_attempts VALUES(?,?,?,?,?)').run(`order:${original}:fixture`, 'OldCard', 'old-card-sub', 3, '2026-10-11 16:17');
+  sqlite.prepare("INSERT INTO web_shop_receipts VALUES('order',?,?,?)").run(original, image, Date.now() + 60_000);
+  const excluded = order.get(userId, 'Approved', 70000, 'approved', '2026-10-11 16:16').id;
+  const expired = order.get(userId, 'ExpiredCard', 70000, 'needs_review', '2026-10-11 16:17').id;
+  sqlite.prepare("INSERT INTO web_shop_receipts VALUES('order',?,?,?)").run(expired, image, Date.now() - 1000);
+  let wallet;
+  for (let index = 0; index < 20; index++) {
+    wallet = order.get(userId, 'WalletTest', 90000, 'needs_review_refunded', '2026-11-23 11:55').id;
+  }
+
+  await buyer.init();
+  assert.equal((await buyer.request('action', { kind: 'button', action: 'admin:wallet_reviews', revision: buyer.state.revision })).status, 400);
+  assert.equal((await buyer.request(`receipt?kind=order&id=${original}`)).status, 403);
+  await admin.request('login', { username: 'owner', password });
+  await admin.init();
+  await admin.press('admin:root');
+  await admin.press('admin:wallet_reviews');
+  assert.ok(admin.buttons().includes(`admin:wallet_review:${wallet}`));
+  assert.match(JSON.stringify(admin.state.messages), /کیف پول \(وجه برگشته\)/);
+  await admin.press(`admin:wallet_review:${wallet}`);
+  assert.ok(admin.buttons().includes(`admin:wallet_close:${wallet}`));
+  await admin.press('admin:wallet_reviews');
+  assert.ok(!admin.buttons().includes(`admin:wallet_review:${original}`));
+  await admin.press(admin.buttons().find(action => action.startsWith('admin:wallet_reviews:')));
+  assert.ok(admin.buttons().includes(`admin:wallet_review:${original}`));
+  assert.ok(!admin.buttons().includes(`admin:wallet_review:${excluded}`));
+  await admin.press(`admin:wallet_review:${expired}`);
+  assert.match(JSON.stringify(admin.state.messages), /تصویر رسید در دسترس نیست/);
+  await admin.press('admin:wallet_reviews');
+  await admin.press(admin.buttons().find(action => action.startsWith('admin:wallet_reviews:')));
+  await admin.press(`admin:wallet_review:${original}`);
+  const details = JSON.stringify(admin.state.messages);
+  for (const detail of ['کارت‌به‌کارت', 'OldCard', 'ورودی اولیه']) assert.ok(details.includes(detail));
+  assert.ok(!admin.buttons().some(action => /^approve_|^admin:wallet_close:/.test(action)));
+  await admin.press(`web:receipt:order:${original}`);
+  assert.equal(admin.state.messages[0].photo, `/shop/api/receipt?kind=order&id=${original}`);
+  assert.deepEqual((await admin.request(`receipt?kind=order&id=${original}`)).data, testJPEG);
+  await admin.press(`admin:wallet_review:${original}`);
+  assert.equal(sqlite.prepare('SELECT status FROM orders WHERE id=?').get(original).status, 'needs_review');
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM wallet_entries').get().n, 0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM services').get().n, 0);
+});
+
 test('card purchase and wallet top-up are reviewed in the web admin without an external messenger', async t => {
   const { sqlite, env } = await fixture(t);
   sqlite.exec(`INSERT INTO plans VALUES('p10',10,70000,1);
