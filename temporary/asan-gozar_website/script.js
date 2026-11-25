@@ -26,19 +26,24 @@
   });
 
   // منوی موبایل با وضعیت قابل‌خواندن برای صفحه‌خوان
+  const closeMenu = () => {
+    nav?.classList.remove('open');
+    menuButton?.setAttribute('aria-expanded', 'false');
+  };
   menuButton?.addEventListener('click', () => {
     const open = nav?.classList.toggle('open') ?? false;
     menuButton.setAttribute('aria-expanded', String(open));
   });
-  nav?.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
-    nav.classList.remove('open');
-    menuButton?.setAttribute('aria-expanded', 'false');
-  }));
+  nav?.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
   document.addEventListener('click', e => {
     if (nav?.classList.contains('open') && !nav.contains(e.target) && !menuButton?.contains(e.target)) {
-      nav.classList.remove('open');
-      menuButton?.setAttribute('aria-expanded', 'false');
+      closeMenu();
     }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || $('noticeDialog')?.open || !nav?.classList.contains('open')) return;
+    closeMenu();
+    menuButton?.focus();
   });
 
   // محاسبه‌گر تعرفه‌های عادی
@@ -46,8 +51,10 @@
   const format = n => new Intl.NumberFormat('fa-IR').format(n) + ' تومان';
   const calculate = () => {
     if (!service || !volume || !total) return;
-    const amount = Number(volume.value);
-    if (!Number.isFinite(amount) || amount < 1 || amount > 100000) {
+    const localizedDigits = '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
+    const digits = volume.value.trim().replace(/[۰-۹٠-٩]/g, digit => String(localizedDigits.indexOf(digit) % 10));
+    const amount = Number(digits);
+    if (!/^\d+$/.test(digits) || !Number.isInteger(amount) || amount < 1 || amount > 100000) {
       total.textContent = 'حجم را بین ۱ تا ۱۰۰٬۰۰۰ وارد کن';
       return;
     }
@@ -60,38 +67,35 @@
   // جست‌وجوی پرسش‌های متداول
   const faqSearch = $('faqSearch'), faqCount = $('faqCount');
   if (faqSearch) {
-    const items = [...document.querySelectorAll('.faq-item')];
+    const normalize = value => value.toLocaleLowerCase('fa')
+      .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک')
+      .replace(/[\s\u200c\u200d]+/g, ' ').trim();
+    const items = [...document.querySelectorAll('.faq-item')].map(
+      item => ({ item, text: normalize(item.textContent) })
+    );
     const filterFaq = () => {
-      const q = faqSearch.value.trim().toLocaleLowerCase('fa');
+      const q = normalize(faqSearch.value);
       let shown = 0;
-      items.forEach(item => {
-        const match = item.textContent.toLocaleLowerCase('fa').includes(q);
+      items.forEach(({ item, text }) => {
+        const match = text.includes(q);
         item.hidden = !match;
         if (match) shown++;
       });
       if (faqCount) faqCount.textContent = `${new Intl.NumberFormat('fa-IR').format(shown)} پرسش پیدا شد`;
     };
     faqSearch.addEventListener('input', filterFaq);
+    filterFaq();
   }
 
   // پنجره اطلاعیه: فقط معرفی کانال رسمی، بدون نمایش تخفیف یا خبر ساختگی
   const dialog = $('noticeDialog'), openNotice = $('noticeOpen'), closeNotice = $('noticeClose');
-  let previousFocus = null;
   const openDialog = () => {
-    if (!dialog) return;
-    previousFocus = document.activeElement;
-    dialog.hidden = false;
-    closeNotice?.focus();
+    if (dialog && !dialog.open) dialog.showModal();
   };
-  const closeDialog = () => {
-    if (!dialog) return;
-    dialog.hidden = true;
-    previousFocus?.focus?.();
-  };
+  const closeDialog = () => dialog?.close();
   openNotice?.addEventListener('click', openDialog);
   closeNotice?.addEventListener('click', closeDialog);
   dialog?.addEventListener('click', e => { if (e.target === dialog) closeDialog(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && dialog && !dialog.hidden) closeDialog(); });
   try {
     const last = Number(localStorage.getItem('ag-notice-time') || 0);
     if (dialog && Date.now() - last > 7 * 24 * 60 * 60 * 1000) {
@@ -121,8 +125,7 @@
   window.addEventListener('load', updateTop, { once: true });
   updateTop();
   topButton?.addEventListener('click', () => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
+    $('main')?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
   });
 })();
