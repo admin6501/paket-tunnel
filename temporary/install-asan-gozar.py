@@ -288,8 +288,8 @@ def main(archive):
         prompt = owner is None
         if prompt:
             username = owner_username()
-            password = getpass.getpass('Choose store owner password (at least 14 characters): ')
-            if password != getpass.getpass('Repeat store owner password: ') or len(password) < 14 or len(password.encode()) > 256 or any(c in password for c in '\x00\r\n'):
+            password = getpass.getpass('Choose store owner password (at least 8 characters): ')
+            if password != getpass.getpass('Repeat store owner password: ') or len(password) < 8 or len(password.encode()) > 256 or any(c in password for c in '\x00\r\n'):
                 raise ValueError('Passwords did not match or expected length was not met.')
         else:
             username = owner[0]

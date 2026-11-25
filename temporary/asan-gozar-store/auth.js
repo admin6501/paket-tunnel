@@ -6,8 +6,17 @@ const dummy = { salt: '00000000000000000000000000000000', password_hash: Buffer.
 let running = 0;
 
 export const validUsername = value => /^[a-z][a-z0-9_]{2,31}$/.test(value);
-export const validPassword = value => typeof value === 'string' &&
-  value.length >= 14 && Buffer.byteLength(value) <= 256 && !/[\r\n\x00]/.test(value);
+const validPasswordInput = value => typeof value === 'string' && Buffer.byteLength(value) <= 256 && !/[\r\n\x00]/.test(value);
+export const validPassword = value => validPasswordInput(value) && [...value].length >= 8;
+
+// Existing passwords could satisfy the old 14-character rule in UTF-16 code units.
+export const validStoredPassword = value => validPasswordInput(value) && (value.length >= 14 || [...value].length >= 8);
+
+export function displayName(value) {
+  if (typeof value !== 'string' || /[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/u.test(value)) return null;
+  const name = value.normalize('NFC').trim();
+  return name.length >= 2 && name.length <= 80 ? name : null;
+}
 
 export async function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   if (running >= 2) throw new Error('password queue busy');

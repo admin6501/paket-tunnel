@@ -240,7 +240,7 @@ test('password rotation verifies the administrator and invalidates the existing 
   assert.equal((await admin.request('state')).data.admin, true);
   assert.equal((await admin.request('password', update, 'https://other.example')).status, 403);
   assert.equal((await admin.request('password', { ...update, currentPassword: 'wrong-but-long-password' })).status, 403);
-  assert.equal((await admin.request('password', { ...update, newPassword: 'too-short' })).status, 400);
+  assert.equal((await admin.request('password', { ...update, newPassword: 'short07' })).status, 400);
   const expire = sqlite.prepare('UPDATE web_shop_sessions SET busy_until=? WHERE user_id=?');
   expire.run(Date.now() + 60_000, owner.id);
   assert.equal((await admin.request('password', update)).status, 409);
@@ -257,8 +257,8 @@ test('customers change their own passwords and administrators reset only custome
   const { sqlite, env, owner } = await fixture(t);
   const customer = browser(env, '192.0.2.84');
   const admin = browser(env, '192.0.2.85');
-  const changed = 'customer-changed-test-password';
-  const reset = 'administrator-reset-test-password';
+  const changed = 'changed8';
+  const reset = 'reset008';
   assert.equal((await customer.request('register', { name: 'Customer', username: 'buyer', password })).status, 200);
   const { id: userId } = sqlite.prepare("SELECT id FROM store_accounts WHERE username='buyer'").get();
   assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
@@ -277,6 +277,36 @@ test('customers change their own passwords and administrators reset only custome
   assert.equal((await customer.request('login', { username: 'buyer', password: changed })).status, 401);
   assert.equal((await customer.request('login', { username: 'buyer', password: reset })).status, 200);
   assert.equal((await admin.request('session')).data.signedIn, true);
+});
+
+test('owner and customers edit their own display names and can use eight-character passwords', async t => {
+  const { env, sqlite, owner } = await fixture(t);
+  const customer = browser(env, '192.0.2.197');
+  const admin = browser(env, '192.0.2.198');
+  assert.equal((await customer.request('profile')).status, 401);
+  const signup = { username: 'buyer', name: 'Customer', password: 'seven77' };
+  assert.equal((await customer.request('register', signup)).status, 400);
+  const oldPassword = '🔒'.repeat(7);
+  assert.equal((await customer.request('register', { ...signup, password: oldPassword })).status, 400);
+  assert.equal((await customer.request('register', { ...signup, password: 'رمزعبور۸' })).status, 200);
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  await admin.init();
+  await admin.press('admin:root');
+  await admin.press('admin:settings');
+  assert.ok(admin.buttons().includes('web:profile'));
+  await customer.init();
+  assert.equal((await customer.request('profile', { name: 'Line\nBreak' })).status, 400);
+  assert.equal((await customer.request('profile', { name: 'نام تازه' }, 'https://other.example')).status, 403);
+  assert.deepEqual((await customer.request('profile', { name: '  نام تازه  ', id: owner.id, username: 'owner' })).data, { name: 'نام تازه' });
+  assert.deepEqual((await customer.request('profile')).data, { username: 'buyer', name: 'نام تازه' });
+  assert.deepEqual((await admin.request('profile')).data, { username: 'owner', name: 'Shop Owner' });
+  assert.deepEqual((await admin.request('profile', { name: 'مدیر فروشگاه' })).data, { name: 'مدیر فروشگاه' });
+  assert.deepEqual((await admin.request('profile')).data, { username: 'owner', name: 'مدیر فروشگاه' });
+  assert.equal(sqlite.prepare('SELECT first_name FROM store_profiles WHERE user_id=?').get(owner.id).first_name, 'مدیر فروشگاه');
+  assert.equal((await browser(env, '192.0.2.199').request('login', { username: 'buyer', password: 'رمزعبور۸' })).status, 200);
+  const legacy = await hashPassword(oldPassword);
+  sqlite.prepare('UPDATE store_accounts SET salt=?,password_hash=? WHERE id=?').run(legacy.salt, legacy.password_hash, owner.id);
+  assert.equal((await admin.request('login', { username: 'owner', password: oldPassword })).status, 200);
 });
 
 test('standalone signup, local admin role, session rotation and private inbox', async t => {
