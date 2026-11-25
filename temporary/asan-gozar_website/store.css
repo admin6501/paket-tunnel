@@ -131,8 +131,13 @@ body.light #status.error { color: #a42234; }
 .auth-form { display: grid; gap: .85rem; max-width: 28rem; }
 #app input, #app textarea { color: var(--text); border: 1px solid var(--line); border-radius: .65rem; padding: .55rem .75rem; background: var(--bg); }
 .auth-form input { width: 100%; }
-#password-change, #inbox { margin-top: 1rem; }
-#password-form { margin-block: .85rem 1.2rem; }
+#password-change, #password-reset, #backup-panel, #inbox { margin-top: 1rem; }
+#password-form, #reset-form { margin-block: .85rem 1.2rem; }
+.backup-forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: 1rem; margin-block: 1rem; }
+.backup-forms .auth-form { align-content: start; max-width: none; padding: 1rem; border-radius: .85rem; border: 1px solid var(--line); }
+.backup-forms h4, .backup-forms p { margin: 0; }
+.backup-forms p, #backup-panel > p, #reset-user { color: var(--muted); }
+.backup-forms input[type=file] { max-width: 100%; }
 #inbox-items { display: grid; gap: .85rem; margin-block: 1rem; }
 #inbox-items time { display: block; color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }
 @media (max-width: 650px) {

@@ -1187,10 +1187,12 @@ async function handleAdminCommand(c, msg) {
 }
 
 // دکمه‌های مدیریت فقط رابط دستورات موجود هستند؛ بررسی مجوز در هر درخواست انجام می‌شود.
-const STORE_USERS_QUERY = `WITH ids AS (SELECT user_id FROM store_profiles UNION SELECT user_id FROM services UNION SELECT user_id FROM orders UNION SELECT user_id FROM wallet_entries UNION SELECT user_id FROM wallet_topups UNION SELECT user_id FROM wallet_payments UNION SELECT user_id FROM discounts UNION SELECT user_id FROM test_claims UNION SELECT referrer_id AS user_id FROM referrals UNION SELECT referred_id AS user_id FROM referrals)`;
+const STORE_USERS_QUERY = `WITH ids AS (SELECT id AS user_id FROM store_accounts UNION SELECT user_id FROM store_profiles UNION SELECT user_id FROM services UNION SELECT user_id FROM orders UNION SELECT user_id FROM wallet_entries UNION SELECT user_id FROM wallet_topups UNION SELECT user_id FROM wallet_payments UNION SELECT user_id FROM discounts UNION SELECT user_id FROM test_claims UNION SELECT referrer_id AS user_id FROM referrals UNION SELECT referred_id AS user_id FROM referrals)`;
 async function storeUserExists(env,id) { return !!(await first(env,`${STORE_USERS_QUERY} SELECT user_id FROM ids WHERE user_id=? LIMIT 1`,id)); }
 async function storeUserIdentity(env,id,cached) {
   let user=cached || await first(env,"SELECT first_name,username,blocked FROM store_profiles WHERE user_id=?",id) || {};
+  const account=await first(env,"SELECT username,display_name FROM store_accounts WHERE id=?",id);
+  if(account) return {...user,username:account.username,first_name:account.display_name};
   if (!user.username) {
     const old=await first(env,"SELECT username FROM orders WHERE user_id=? AND username IS NOT NULL AND username!='' AND username!='-' ORDER BY id DESC LIMIT 1",id);
     if(old?.username) user={...user,username:String(old.username).slice(0,64),usernameFromOrder:true};
@@ -1490,6 +1492,7 @@ async function handleAdminUICallback(c, cq, answer) {
     delete st.admin_ui_step; delete st.admin_ui_key;
     const keyboard = adminHomeKb();
     if (env.WEB_STATE) keyboard.inline_keyboard.unshift([btn('فیش‌های در انتظار', 'web:orders')]);
+    if (env.WEB_STATE && owner) keyboard.inline_keyboard.push([btn('پشتیبان‌گیری و بازیابی', 'web:backup')]);
     return renderAdmin("🛠 <b>پنل مدیریت فروشگاه</b>\n\nبخش موردنظر را انتخاب کنید:", keyboard);
   }
   if (d === 'admin:apps') {
@@ -1695,6 +1698,9 @@ async function handleAdminUICallback(c, cq, answer) {
     const balance=await walletBalance(env,target); const name=esc(u?.first_name || "نام در دسترس نیست"), username=esc(u?.username ? "@"+String(u.username).replace(/^@/,"") : "ثبت نشده یا در دسترس نیست");
     const rows=[[btn("📦 سرویس‌ها و وضعیت",`admin:us:${target}:0`),btn("🧾 همه سفارش‌ها",`admin:uo:${target}:0`)],[btn("💰 کیف پول",`admin:wallet_view:${target}`),btn("📜 تراکنش‌ها",`admin:ut:${target}:0`)],[btn("✉️ پیام خصوصی",`admin:message_user:${target}`)]];
     if(!env.admins.has(target)) rows.push([btn(u?.blocked ? "✅ رفع مسدودی" : "⛔ مسدود کردن",`admin:ub:${target}:${u?.blocked ? 0 : 1}`)]);
+    if(env.WEB_STATE && !env.admins.has(target) && await first(env,'SELECT 1 FROM store_accounts WHERE id=?',target)) {
+      rows.push([btn('بازنشانی رمز کاربر',`web:reset_password:${target}`)]);
+    }
     rows.push([btn("🔙 کاربران","admin:users:0")]);
     return renderAdmin(`👤 <b>${name}</b>\nشناسه: <code>${target}</code>\nنام کاربری: ${username}${u.usernameFromOrder ? " (از سفارش قدیمی؛ ممکن است تغییر کرده باشد)" : ""}\nدسترسی فروشگاه: ${u?.blocked ? "مسدود" : "باز"}\nموجودی: ${toman(balance)}`,kb(rows));
   }

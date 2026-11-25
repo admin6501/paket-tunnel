@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { createStoreBackups } from './backups.mjs';
 import { openStore } from './database.mjs';
 import { listenForWebShop } from './http.mjs';
 import { handleUpdate, recoverStorePayments, runBulkMigrations, runSubscriptionPolicies } from './engine.js';
@@ -14,23 +16,31 @@ if (origin.protocol !== 'https:' || origin.origin !== config.origin ||
     !Number.isInteger(port) || port < 1024 || port > 65535 || !/^[0-9a-f]{64}$/i.test(config.secret || '')) {
   throw new Error('Configure the HTTPS origin, loopback port and a 32-byte hex secret.');
 }
-const { sqlite, DB } = openStore(process.env.STORE_DATABASE || '/var/lib/asan-gozar-store/store.sqlite');
-const owners = sqlite.prepare('SELECT id FROM store_accounts WHERE owner=1 ORDER BY id');
-if (!owners.get()) throw new Error('Create a shop owner first.');
-const env = { DB, STORE_SECRET: config.secret, WEB_SHOP_ORIGIN: origin.origin };
-const withOwners = base => ({ ...base, OWNER_IDS: owners.all().map(row => row.id).join(',') });
-const app = (request, base) => isWebShopPath(new URL(request.url).pathname)
-  ? webShopRequest(request, withOwners(base), handleUpdate) : new Response(null, { status: 404 });
+const database = resolve(process.env.STORE_DATABASE || '/var/lib/asan-gozar-store/store.sqlite');
+let store = openStore(database);
+const owners = () => store.sqlite.prepare('SELECT id FROM store_accounts WHERE owner=1 ORDER BY id').all();
+if (!owners().length) throw new Error('Create a shop owner first.');
+const tasks = new Set();
+let requests = 0;
+const backups = createStoreBackups(database, config.secret, () => store, replacement => { store = replacement; },
+  () => requests === 1 && tasks.size === 0);
+const env = { STORE_SECRET: config.secret, WEB_SHOP_ORIGIN: origin.origin, WEB_SHOP_BACKUPS: backups };
+const context = base => ({ ...base, DB: store.DB, OWNER_IDS: owners().map(row => row.id).join(',') });
+const app = async (request, base) => {
+  if (!isWebShopPath(new URL(request.url).pathname)) return new Response(null, { status: 404 });
+  requests++;
+  try { return await webShopRequest(request, context(base), handleUpdate); }
+  finally { requests--; }
+};
 const http = await listenForWebShop(app, env, port);
 
 const shutdown = new AbortController();
 const intervals = [];
-const tasks = new Set();
 function schedule(label, delay, run) {
   let pending;
   function tick() {
     if (pending || shutdown.signal.aborted) return;
-    pending = Promise.resolve().then(() => run(withOwners(env)))
+    pending = Promise.resolve().then(() => run(context(env)))
       .catch(() => console.error(label + ' failed'))
       .finally(() => { tasks.delete(pending); pending = null; });
     tasks.add(pending);
@@ -55,7 +65,7 @@ async function stop() {
   intervals.forEach(clearInterval);
   await new Promise(resolve => http.close(resolve));
   await Promise.allSettled(tasks);
-  sqlite.close();
+  store.sqlite.close();
 }
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
