@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="/store.css?v=6">
   <script src="/script.js?v=5" defer></script>
   <script src="/tickets.js?v=6" defer></script>
-  <script src="/store.js?v=7" defer></script>
+  <script src="/store.js?v=8" defer></script>
 
   <meta property="og:description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
   <meta property="og:site_name" content="آسان‌گذر">
@@ -56,7 +56,7 @@
           </div>
           <div>
             <label for="password">رمز عبور</label>
-            <input id="password" dir="ltr" type="password" autocomplete="current-password" required minlength="14">
+            <input id="password" dir="ltr" type="password" autocomplete="current-password" required minlength="8">
           </div>
           <div class="actions">
             <button type="submit" id="auth-submit">ورود</button>
@@ -71,12 +71,26 @@
           <button type="button" id="tickets-manage" class="secondary" aria-controls="ticket-panel" hidden>مدیریت تیکت‌ها</button>
           <button type="button" id="inbox-open" class="secondary">صندوق پیام</button>
           <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
+          <button type="button" id="profile-open" class="secondary" aria-controls="profile-edit" aria-expanded="false">پروفایل</button>
           <button type="button" id="password-open" class="secondary" aria-controls="password-change" aria-expanded="false">تغییر رمز عبور</button>
           <button type="button" id="logout" class="secondary logout">خروج</button>
         </div>
+        <section id="profile-edit" class="settings-editor" hidden aria-labelledby="profile-title">
+          <h2 id="profile-title">پروفایل من</h2>
+          <form id="profile-form" class="auth-form">
+            <div>
+              <label for="profile-name">نام نمایشی</label>
+              <input id="profile-name" dir="auto" autocomplete="nickname" minlength="2" maxlength="80" required>
+            </div>
+            <div class="actions">
+              <button type="submit">ذخیرهٔ نام نمایشی</button>
+              <button type="button" id="profile-cancel" class="secondary">انصراف</button>
+            </div>
+          </form>
+        </section>
         <section id="password-change" hidden aria-labelledby="password-title">
           <h3 id="password-title">تغییر رمز عبور حساب</h3>
-          <p>رمز جدید دست‌کم ۱۴ نویسه داشته باشد. پس از ذخیره، دوباره وارد حساب شوید.</p>
+          <p>رمز جدید دست‌کم ۸ نویسه داشته باشد. پس از ذخیره، دوباره وارد حساب شوید.</p>
           <form id="password-form" class="auth-form">
             <div>
               <label for="current-password">رمز فعلی</label>
@@ -84,11 +98,11 @@
             </div>
             <div>
               <label for="new-password">رمز جدید</label>
-              <input id="new-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+              <input id="new-password" dir="ltr" type="password" autocomplete="new-password" minlength="8" required>
             </div>
             <div>
               <label for="repeat-password">تکرار رمز جدید</label>
-              <input id="repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+              <input id="repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="8" required>
             </div>
             <div class="actions">
               <button type="submit">ذخیره رمز جدید</button>
@@ -106,11 +120,11 @@
             </div>
             <div>
               <label for="reset-new-password">رمز جدید کاربر</label>
-              <input id="reset-new-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+              <input id="reset-new-password" dir="ltr" type="password" autocomplete="new-password" minlength="8" required>
             </div>
             <div>
               <label for="reset-repeat-password">تکرار رمز جدید کاربر</label>
-              <input id="reset-repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+              <input id="reset-repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="8" required>
             </div>
             <div class="actions">
               <button type="submit">ذخیره و خروج کاربر از حساب</button>

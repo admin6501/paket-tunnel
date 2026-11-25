@@ -153,6 +153,7 @@ function show(newState) {
           button.type = 'button';
           button.textContent = displayText(option.text).trim();
           button.addEventListener('click', () => {
+            if (option.action === 'web:profile') { editProfile(button); return; }
             if (['web:tickets', 'web:ticket-admin', 'support'].includes(option.action)) {
               void perform(() => openSupport(option.action === 'web:ticket-admin'));
               return;
@@ -256,7 +257,9 @@ function closeAccountForms() {
   get('backup-panel').hidden = true;
   get('notice-editor').hidden = true;
   get('brand-editor').hidden = true;
-  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form', 'brand-form']) get(id).reset();
+  get('profile-edit').hidden = true;
+  get('profile-open').setAttribute('aria-expanded', 'false');
+  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form', 'brand-form', 'profile-form']) get(id).reset();
   resetTarget = null;
   panelTrigger = null;
 }
@@ -278,7 +281,28 @@ get('password-open').addEventListener('click', () => {
   openAccountForm('password-change', 'current-password', get('password-open'));
   get('password-open').setAttribute('aria-expanded', 'true');
 });
-for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel']) get(id).addEventListener('click', cancelAccountForm);
+for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel', 'profile-cancel']) get(id).addEventListener('click', cancelAccountForm);
+
+function editProfile(trigger) {
+  void perform(async () => {
+    const profile = await api('profile');
+    openAccountForm('profile-edit', 'profile-name', trigger);
+    get('profile-name').value = profile.name;
+    get('profile-open').setAttribute('aria-expanded', 'true');
+  }).then(() => {
+    if (!get('profile-edit').hidden) get('profile-name').focus();
+  });
+}
+
+get('profile-open').addEventListener('click', event => editProfile(event.currentTarget));
+get('profile-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    const { name } = await api('profile', { name: get('profile-name').value });
+    get('profile-name').value = name;
+    return 'نام نمایشی ذخیره شد.';
+  });
+});
 get('brand-form').addEventListener('submit', event => {
   event.preventDefault();
   void perform(async () => {

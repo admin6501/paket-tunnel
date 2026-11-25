@@ -1,4 +1,4 @@
-import { checkPassword, hashPassword, validPassword, validUsername } from './auth.js';
+import { checkPassword, displayName, hashPassword, validPassword, validStoredPassword, validUsername } from './auth.js';
 import { deliverToInbox } from './inbox.js';
 import { BACKUP_LIMIT, BackupError } from './backups.mjs';
 import { BRAND_KEY, brandText, readBrand, validBrandName } from './brand.mjs';
@@ -130,13 +130,31 @@ async function publicPlans(env, plans) {
   return json({ plans: plans.map(plan => ({ ...plan, category: brandText(plan.category, name) })) });
 }
 
+async function accountProfile(request, env, session) {
+  if (request.method === 'GET') {
+    const profile = await first(env, 'SELECT username,display_name AS name FROM store_accounts WHERE id=?', session.user_id);
+    return profile ? json(profile) : json({ error: 'دوباره وارد شوید.' }, 401);
+  }
+  const body = await readBody(request);
+  const name = displayName(body?.name);
+  if (!name) return json({ error: 'نام نمایشی باید بین ۲ تا ۸۰ نویسه باشد و در یک خط نوشته شود.' }, 400);
+  const now = Date.now();
+  const [saved] = await env.DB.batch([
+    env.DB.prepare(`UPDATE store_accounts SET display_name=? WHERE id=? AND EXISTS(
+      SELECT 1 FROM web_shop_sessions WHERE token=? AND user_id=store_accounts.id AND expires_at>? AND busy_until<=?
+    )`).bind(name, session.user_id, session.token, now, now),
+    env.DB.prepare('UPDATE store_profiles SET first_name=? WHERE user_id=? AND changes()=1').bind(name, session.user_id),
+  ]);
+  return saved.meta.changes ? json({ name }) : json({ error: 'وضعیت حساب تغییر کرده است. دوباره تلاش کنید.' }, 409);
+}
+
 async function changePassword(request, env, session) {
   if (await limited(env, `password:${session.user_id}`, 5)) {
     return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
   }
   const body = await readBody(request);
-  if (!validPassword(body?.currentPassword) || !validPassword(body?.newPassword) || body.currentPassword === body.newPassword) {
-    return json({ error: 'رمز جدید باید با رمز فعلی متفاوت و حداقل ۱۴ نویسه باشد.' }, 400);
+  if (!validStoredPassword(body?.currentPassword) || !validPassword(body?.newPassword) || body.currentPassword === body.newPassword) {
+    return json({ error: 'رمز جدید باید با رمز فعلی متفاوت و حداقل ۸ نویسه باشد.' }, 400);
   }
   const account = await first(env, 'SELECT salt,password_hash FROM store_accounts WHERE id=?', session.user_id);
   let replacement;
@@ -172,9 +190,9 @@ async function resetCustomerPassword(request, env, session) {
     return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
   }
   const body = await readBody(request);
-  if (!Number.isSafeInteger(body?.userId) || body.userId <= 0 || !validPassword(body?.currentPassword) ||
+  if (!Number.isSafeInteger(body?.userId) || body.userId <= 0 || !validStoredPassword(body?.currentPassword) ||
       !validPassword(body?.newPassword) || body.currentPassword === body.newPassword) {
-    return json({ error: 'شناسه و رمزها را بررسی کنید. رمز جدید دست‌کم ۱۴ نویسه باشد.' }, 400);
+    return json({ error: 'شناسه و رمزها را بررسی کنید. رمز جدید دست‌کم ۸ نویسه باشد.' }, 400);
   }
   const customer = await first(env, 'SELECT salt FROM store_accounts WHERE id=?', body.userId);
   if (!customer || await isAdmin(env, body.userId)) return json({ error: 'حساب کاربر برای بازنشانی در دسترس نیست.' }, 403);
@@ -222,7 +240,7 @@ async function manageBackup(route, request, env, session) {
     }
     if (await limited(env, `backup:${session.user_id}`, 6)) return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
     const body = await readBody(request);
-    if (!validPassword(body?.currentPassword)) return json({ error: 'رمز فعلی را وارد کنید.' }, 400);
+    if (!validStoredPassword(body?.currentPassword)) return json({ error: 'رمز فعلی را وارد کنید.' }, 400);
     const owner = await verifyCurrentPassword(env, session, body.currentPassword);
     if (!(await activeOwner(owner.salt))) return json({ error: 'دوباره وارد شوید.' }, 401);
     if (route === 'backup/authorize-restore') return json({ ticket: backups.issueTicket(session) });
@@ -325,11 +343,12 @@ export async function webShopRequest(request, env, update) {
     if (await limited(env, `login:${ip}`, 8)) return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
     const body = await readBody(request);
     const username = typeof body?.username === 'string' ? body.username.trim().toLowerCase() : '';
-    const display = typeof body?.name === 'string' ? body.name.trim() : '';
-    if (!validUsername(username) || !validPassword(body?.password) ||
-        (route === 'register' && (display.length < 2 || display.length > 80 || /[\x00-\x1f]/.test(display)))) {
-      return json({ error: 'نام کاربری یا رمز معتبر نیست. رمز حداقل ۱۴ نویسه باشد.' }, 400);
+    const display = displayName(body?.name);
+    const passwordValid = route === 'register' ? validPassword(body?.password) : validStoredPassword(body?.password);
+    if (!validUsername(username) || !passwordValid) {
+      return json({ error: 'نام کاربری یا رمز معتبر نیست. رمز حداقل ۸ نویسه باشد.' }, 400);
     }
+    if (route === 'register' && !display) return json({ error: 'نام نمایشی باید بین ۲ تا ۸۰ نویسه باشد و در یک خط نوشته شود.' }, 400);
     if (await limited(env, `login-user:${username}`, 8)) return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
     let account = await first(env, 'SELECT id,username,display_name,salt,password_hash FROM store_accounts WHERE username=?', username);
     let passwordOK = false;
@@ -380,6 +399,7 @@ export async function webShopRequest(request, env, update) {
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
+  if (route === 'profile') return accountProfile(request, env, session);
   if (/^(admin\/)?tickets(?:\/|$)/.test(route)) {
     if (request.method === 'POST' && await limited(env, `ticket:${session.user_id}`, route === 'tickets' ? 8 : 30)) {
       return json({ error: 'لطفاً کمی صبر کنید و دوباره تلاش کنید.' }, 429);
@@ -438,7 +458,7 @@ export async function webShopRequest(request, env, update) {
   const body = await readBody(request);
   if (!body || body.revision !== session.revision) return json({ error: 'صفحه را تازه کنید.' }, 409);
   const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action)
-    .filter(action => !['web:backup','web:notice','web:brand','web:tickets','web:ticket-admin'].includes(action) && !action?.startsWith('web:reset_password:'));
+    .filter(action => !['web:backup','web:notice','web:brand','web:tickets','web:ticket-admin','web:profile'].includes(action) && !action?.startsWith('web:reset_password:'));
   const state = JSON.parse(session.state_json);
   const image = body.kind === 'image' && validImage(body.image);
   const input = publicState(session).input;
