@@ -22,7 +22,7 @@ let panelTrigger = null;
 let supportLink = location.hash === '#tickets';
 const supportParams = new URLSearchParams(location.search);
 const linkedTicket = Number(supportParams.get('ticket') || supportParams.get('staffTicket'));
-const tickets = setupTickets(get('ticket-panel'), api, perform, refresh, displayText);
+const tickets = setupTickets(get('ticket-panel'), api, perform, refresh, displayText, uploadTicketImage, imageLimitLabel);
 
 function announce(text = '', error = false) {
   status.textContent = text;
@@ -154,6 +154,7 @@ function show(newState) {
           button.textContent = displayText(option.text).trim();
           button.addEventListener('click', () => {
             if (option.action === 'web:profile') { editProfile(button); return; }
+            if (option.action === 'web:uploads') { editUploadLimits(button); return; }
             if (['web:tickets', 'web:ticket-admin', 'support'].includes(option.action)) {
               void perform(() => openSupport(option.action === 'web:ticket-admin'));
               return;
@@ -197,6 +198,9 @@ function show(newState) {
   reply.reset();
   reply.hidden = !state.input;
   const label = get('reply-label');
+  const receiptHint = get('receipt-hint');
+  receiptHint.hidden = state.input !== 'image';
+  receiptHint.textContent = state.input === 'image' ? `JPG، PNG یا WebP · حداکثر ${imageLimitLabel(state.receiptKiB)}` : '';
   const field = { text: 'reply-value', password: 'reply-secret', image: 'reply-image' }[state.input];
   for (const id of ['reply-value','reply-secret','reply-image']) get(id).hidden = id !== field;
   if (field) {
@@ -258,8 +262,9 @@ function closeAccountForms() {
   get('notice-editor').hidden = true;
   get('brand-editor').hidden = true;
   get('profile-edit').hidden = true;
+  get('upload-editor').hidden = true;
   get('profile-open').setAttribute('aria-expanded', 'false');
-  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form', 'brand-form', 'profile-form']) get(id).reset();
+  for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form', 'brand-form', 'profile-form', 'upload-form']) get(id).reset();
   resetTarget = null;
   panelTrigger = null;
 }
@@ -281,7 +286,29 @@ get('password-open').addEventListener('click', () => {
   openAccountForm('password-change', 'current-password', get('password-open'));
   get('password-open').setAttribute('aria-expanded', 'true');
 });
-for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel', 'profile-cancel']) get(id).addEventListener('click', cancelAccountForm);
+for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel', 'profile-cancel', 'upload-cancel']) get(id).addEventListener('click', cancelAccountForm);
+
+function editUploadLimits(trigger) {
+  void perform(async () => {
+    const { receiptKiB, ticketKiB, minKiB, maxKiB } = await api('uploads');
+    openAccountForm('upload-editor', 'receipt-limit', trigger);
+    for (const [id, value] of [['receipt-limit', receiptKiB], ['ticket-limit', ticketKiB]]) {
+      const control = get(id);
+      control.min = minKiB;
+      control.max = maxKiB;
+      control.value = value;
+    }
+    get('upload-range').textContent = `بازهٔ مجاز برای هر تصویر ${number.format(minKiB)} تا ${number.format(maxKiB)} کیلوبایت است.`;
+  }).then(() => { if (!get('upload-editor').hidden) get('receipt-limit').focus(); });
+}
+
+get('upload-form').addEventListener('submit', event => {
+  event.preventDefault();
+  void perform(async () => {
+    await api('admin/uploads', { receiptKiB: get('receipt-limit').valueAsNumber, ticketKiB: get('ticket-limit').valueAsNumber });
+    return 'سقف حجم تصاویر ذخیره شد.';
+  });
+});
 
 function editProfile(trigger) {
   void perform(async () => {
@@ -394,13 +421,18 @@ get('backup-restore').addEventListener('submit', event => {
   });
 });
 
-async function imageData(file) {
-  if (!file || file.size > 10_000_000 || !['image/jpeg','image/png','image/webp'].includes(file.type)) {
-    throw new Error('یک تصویر JPG، PNG یا WebP حداکثر ۱۰ مگابایت انتخاب کنید.');
+function imageLimitLabel(kib) {
+  return kib % 1024 === 0 ? `${number.format(kib / 1024)} مگابایت` : `${number.format(kib)} کیلوبایت`;
+}
+
+async function encodeImage(file, limitKiB, maxSide) {
+  const limit = limitKiB * 1024;
+  if (!file || file.size > limit || !['image/jpeg','image/png','image/webp'].includes(file.type)) {
+    throw new Error(`یک تصویر JPG، PNG یا WebP حداکثر ${imageLimitLabel(limitKiB)} انتخاب کنید.`);
   }
-  const image = await createImageBitmap(file);
+  const image = await createImageBitmap(file).catch(() => { throw new Error('فایل انتخاب‌شده باز نمی‌شود. تصویر دیگری انتخاب کنید.'); });
   try {
-    const scale = Math.min(1, 1460 / Math.max(image.width, image.height));
+    const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(image.width * scale));
     canvas.height = Math.max(1, Math.round(image.height * scale));
@@ -408,10 +440,28 @@ async function imageData(file) {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    const data = canvas.toDataURL('image/jpeg', .8).split(',')[1];
-    if (!data || data.length > 800_000) throw new Error('تصویر خوانا با حجم کمتری بفرستید.');
-    return data;
+    for (const quality of [.88, .72, .55]) {
+      const data = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (data && data.size <= limit) return data;
+    }
+    throw new Error(`تصویر خوانایی با حجم حداکثر ${imageLimitLabel(limitKiB)} انتخاب کنید.`);
   } finally { image.close(); }
+}
+
+async function uploadTicketImage(file, limitKiB) {
+  const image = await encodeImage(file, limitKiB, 2200);
+  const response = await shopFetch('uploads/ticket', { method: 'POST', body: image, headers: { 'Content-Type': 'image/jpeg' } });
+  return (await response.json()).id;
+}
+
+async function receiptImage(file, limitKiB) {
+  const image = await encodeImage(file, limitKiB, 1800);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',', 2)[1]);
+    reader.onerror = () => reject(new Error('خواندن تصویر رسید امکان‌پذیر نبود.'));
+    reader.readAsDataURL(image);
+  });
 }
 
 get('toggle-signup').addEventListener('click', () => {
@@ -505,7 +555,9 @@ reply.addEventListener('submit', event => {
   event.preventDefault();
   void perform(async () => {
     if (state.input === 'image') {
-      await action({ kind: 'image', image: await imageData(get('reply-image').files[0]) });
+      const { receiptKiB } = await api('uploads');
+      get('receipt-hint').textContent = `JPG، PNG یا WebP · حداکثر ${imageLimitLabel(receiptKiB)}`;
+      await action({ kind: 'image', image: await receiptImage(get('reply-image').files[0], receiptKiB) });
       return;
     }
     const secret = state.input === 'password';

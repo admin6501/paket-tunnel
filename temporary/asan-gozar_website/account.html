@@ -14,10 +14,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css?v=5">
-  <link rel="stylesheet" href="/store.css?v=6">
+  <link rel="stylesheet" href="/store.css?v=7">
   <script src="/script.js?v=5" defer></script>
-  <script src="/tickets.js?v=6" defer></script>
-  <script src="/store.js?v=8" defer></script>
+  <script src="/tickets.js?v=7" defer></script>
+  <script src="/store.js?v=9" defer></script>
 
   <meta property="og:description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
   <meta property="og:site_name" content="آسان‌گذر">
@@ -195,6 +195,20 @@
             </div>
           </form>
         </section>
+        <section id="upload-editor" class="settings-editor" hidden aria-labelledby="upload-title">
+          <h2 id="upload-title">سقف حجم تصاویر</h2>
+          <form id="upload-form" class="auth-form">
+            <div><label for="receipt-limit">حداکثر حجم رسید پرداخت (کیلوبایت)</label>
+              <input id="receipt-limit" type="number" dir="ltr" step="1" required aria-describedby="upload-range"></div>
+            <div><label for="ticket-limit">حداکثر حجم هر عکس تیکت (کیلوبایت)</label>
+              <input id="ticket-limit" type="number" dir="ltr" step="1" required aria-describedby="upload-range"></div>
+            <p id="upload-range"></p>
+            <div class="actions">
+              <button type="submit">ذخیرهٔ سقف تصاویر</button>
+              <button type="button" id="upload-cancel" class="secondary">بازگشت به تنظیمات</button>
+            </div>
+          </form>
+        </section>
         <section id="inbox" hidden aria-labelledby="inbox-title">
           <h2 id="inbox-title">صندوق پیام سایت</h2>
           <div id="inbox-items" aria-live="polite"></div>
@@ -210,9 +224,10 @@
           <div class="form-row">
             <textarea id="reply-value" rows="3" maxlength="3500"></textarea>
             <input id="reply-secret" type="password" aria-labelledby="reply-label" maxlength="3500" autocomplete="off" hidden>
-            <input id="reply-image" aria-labelledby="reply-label" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+            <input id="reply-image" aria-labelledby="reply-label" aria-describedby="receipt-hint" type="file" accept="image/jpeg,image/png,image/webp" hidden>
             <button type="submit">ارسال</button>
           </div>
+          <p id="receipt-hint" class="ticket-meta" hidden></p>
         </form>
       </section>
       <noscript><p>برای استفاده از فروشگاه، جاوااسکریپت را فعال کن.</p></noscript>

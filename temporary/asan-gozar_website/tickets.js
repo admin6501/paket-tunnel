@@ -1,4 +1,4 @@
-function setupTickets(container, api, perform, returnToMenu, visibleText) {
+function setupTickets(container, api, perform, returnToMenu, visibleText, uploadImage, imageLimitLabel) {
   const statuses = { open: 'باز', in_progress: 'در حال بررسی', waiting_customer: 'منتظر پاسخ مشتری', resolved: 'حل‌شده', closed: 'بسته' };
   const priorities = { low: 'کم', normal: 'عادی', high: 'زیاد', urgent: 'فوری' };
   const messageKinds = { staff: 'پاسخ پشتیبانی', customer: 'پیام مشتری', note: 'یادداشت داخلی', event: 'تاریخچهٔ تغییرات' };
@@ -70,7 +70,68 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
   }
 
   async function loadOptions() {
-    options = await api(route('/departments'));
+    const [departments, uploads] = await Promise.all([api(route('/departments')), api('uploads')]);
+    options = { ...departments, uploads };
+  }
+
+  function attachmentFields() {
+    const { ticketKiB, maxImages } = options.uploads;
+    const format = ['image/jpeg', 'image/png', 'image/webp'];
+    const files = [];
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.multiple = true;
+    picker.accept = format.join(',');
+    const hint = block('small', `JPG، PNG یا WebP · حداکثر ${number.format(maxImages)} عکس برای هر پیام · ${imageLimitLabel(ticketKiB)} برای هر عکس`, 'ticket-meta');
+    const progress = block('p', '', 'ticket-meta');
+    progress.setAttribute('role', 'status');
+    const list = block('ul', '', 'ticket-files');
+    function showFiles() {
+      list.replaceChildren(...files.map((entry, index) => {
+        const item = block('li');
+        const remove = block('button', 'حذف', 'secondary');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', `حذف ${entry.file.name}`);
+        remove.addEventListener('click', () => { files.splice(index, 1); showFiles(); });
+        item.append(block('span', entry.file.name), remove);
+        return item;
+      }));
+    }
+    picker.addEventListener('change', () => {
+      const chosen = [...picker.files];
+      picker.value = '';
+      if (chosen.length + files.length > maxImages) {
+        progress.textContent = `برای هر پیام تا ${number.format(maxImages)} عکس انتخاب کنید.`;
+        return;
+      }
+      if (chosen.some(file => !format.includes(file.type) || file.size > ticketKiB * 1024)) {
+        progress.textContent = `فرمت و حجم عکس‌ها را بررسی کنید. سقف هر عکس ${imageLimitLabel(ticketKiB)} است.`;
+        return;
+      }
+      files.push(...chosen.map(file => ({ file })));
+      progress.textContent = '';
+      showFiles();
+    });
+    const wrapper = field('پیوست عکس', picker);
+    wrapper.append(hint);
+    return {
+      elements: [wrapper, list, progress],
+      async upload(message) {
+        if (!message.trim() && !files.length) throw new Error('متن پیام را وارد کنید یا عکس پیوست کنید.');
+        const ids = [];
+        try {
+          for (const [index, entry] of files.entries()) {
+            progress.textContent = `در حال بارگذاری عکس ${number.format(index + 1)} از ${number.format(files.length)}`;
+            if (!entry.id || entry.expires <= Date.now()) {
+              entry.id = await uploadImage(entry.file, ticketKiB);
+              entry.expires = Date.now() + 19 * 60_000;
+            }
+            ids.push(entry.id);
+          }
+          return ids;
+        } finally { progress.textContent = ''; }
+      },
+    };
   }
 
   async function list(append = false) {
@@ -111,6 +172,7 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
       item.append(control, block('span', '#' + number.format(ticket.id) + ' · ' + ticket.department, 'ticket-meta'));
       item.append(block('span', statuses[ticket.status], 'ticket-pill'), block('time', date.format(ticket.updated_at), 'ticket-meta'));
       if (staff) item.append(block('span', ticket.customer + ' · ' + priorities[ticket.priority] + ' · ' + (ticket.assignee || 'بدون ارجاع'), 'ticket-meta'));
+      else item.append(block('span', 'اولویت ' + priorities[ticket.priority], 'ticket-meta'));
       results.append(item);
     }
     container.append(results);
@@ -131,10 +193,15 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
     describe();
     const subject = input('', 120);
     const message = input('', 4000, true);
-    subject.required = message.required = true;
-    const editor = form(field('دپارتمان', unit), description, field('موضوع', subject), field('متن درخواست', message), submit('ثبت تیکت'));
+    const priority = select(Object.entries(priorities), 'normal');
+    const attachments = attachmentFields();
+    subject.required = true;
+    const editor = form(field('دپارتمان', unit), description, field('موضوع', subject), field('اولویت', priority),
+      field('متن درخواست', message), ...attachments.elements, submit('ثبت تیکت'));
     onSubmit(editor, async () => {
-      const { id } = await api(route(''), { department: Number(unit.value), subject: subject.value, message: message.value });
+      const images = await attachments.upload(message.value);
+      const { id } = await api(route(''), { department: Number(unit.value), subject: subject.value,
+        priority: priority.value, message: message.value, images });
       await openThread(id);
       return 'تیکت ثبت شد.';
     });
@@ -148,7 +215,26 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
       card.dataset.kind = entry.kind;
       const header = block('header', '', 'ticket-meta');
       header.append(block('strong', messageKinds[entry.kind]), block('span', entry.author), block('time', date.format(entry.created_at)));
-      card.append(header, block('p', entry.body));
+      card.append(header);
+      if (entry.body) card.append(block('p', entry.body));
+      if (entry.images?.length) {
+        const gallery = block('div', '', 'ticket-images');
+        for (const [index, id] of entry.images.entries()) {
+          const href = `/shop/api/${route('/' + ticketId + '/images/' + id)}`;
+          const label = `مشاهدهٔ عکس ${number.format(index + 1)}`;
+          const link = block('a');
+          link.href = href;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          const photo = block('img');
+          photo.src = href;
+          photo.alt = label;
+          photo.loading = 'lazy';
+          link.append(photo, block('span', label));
+          gallery.append(link);
+        }
+        card.append(gallery);
+      }
       return card;
     });
     if (append) thread.prepend(...cards);
@@ -165,7 +251,7 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
       renderMessages(data.messages, true);
     } else {
       toolbar('#' + number.format(current.id) + ' · ' + current.subject, [button('بازگشت به تیکت‌ها', () => list())]);
-      container.append(block('p', current.department + ' · ' + statuses[current.status] +
+      container.append(block('p', current.department + ' · ' + statuses[current.status] + ' · اولویت ' + priorities[current.priority] +
         (staff ? ' · مشتری ' + current.customer : ''), 'ticket-meta'));
       renderMessages(data.messages, false);
       renderThreadActions();
@@ -201,6 +287,17 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
       });
       container.append(controls);
     } else {
+      if (!isFinished) {
+        const priority = select(Object.entries(priorities), current.priority);
+        const priorityForm = form(field('اولویت', priority), submit('ذخیرهٔ اولویت'));
+        priorityForm.classList.add('ticket-filters');
+        onSubmit(priorityForm, async () => {
+          await api(route('/' + id + '/update'), { version, priority: priority.value });
+          await openThread(id);
+          return 'اولویت تیکت ذخیره شد.';
+        });
+        container.append(priorityForm);
+      }
       const nextStatus = isFinished ? 'open' : 'closed';
       container.append(button(isFinished ? 'بازگشایی تیکت' : 'بستن تیکت', async () => {
         await api(route('/' + id + '/update'), { version, status: nextStatus });
@@ -209,11 +306,12 @@ function setupTickets(container, api, perform, returnToMenu, visibleText) {
     }
     if (isFinished && !staff) return;
     const reply = input('', 4000, true);
-    reply.required = true;
+    const attachments = attachmentFields();
     const mode = select(isFinished ? [['note', 'یادداشت داخلی']] : [['reply', 'پاسخ به مشتری'], ['note', 'یادداشت داخلی']]);
-    const editor = form(...(staff ? [field('نوع پیام', mode)] : []), field('متن پیام', reply), submit('ارسال'));
+    const editor = form(...(staff ? [field('نوع پیام', mode)] : []), field('متن پیام', reply), ...attachments.elements, submit('ارسال'));
     onSubmit(editor, async () => {
-      await api(route('/' + id + '/reply'), { message: reply.value, internal: staff && mode.value === 'note', version });
+      const images = await attachments.upload(reply.value);
+      await api(route('/' + id + '/reply'), { message: reply.value, images, internal: staff && mode.value === 'note', version });
       await openThread(id);
       return 'پیام ثبت شد.';
     });

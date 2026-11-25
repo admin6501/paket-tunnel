@@ -35,4 +35,18 @@ CREATE TABLE IF NOT EXISTS store_ticket_messages (
   created_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS store_ticket_thread ON store_ticket_messages(ticket_id,id DESC);
+
+CREATE TABLE IF NOT EXISTS store_ticket_images (
+  id TEXT PRIMARY KEY NOT NULL,
+  message_id INTEGER REFERENCES store_ticket_messages(id) ON DELETE CASCADE,
+  session_token TEXT,
+  expires_at INTEGER,
+  position INTEGER NOT NULL DEFAULT 0,
+  data BLOB NOT NULL,
+  CHECK((message_id IS NULL AND session_token IS NOT NULL AND expires_at IS NOT NULL) OR
+        (message_id IS NOT NULL AND session_token IS NULL AND expires_at IS NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS store_ticket_image_message ON store_ticket_images(message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS store_ticket_image_pending ON store_ticket_images(session_token,expires_at) WHERE message_id IS NULL;
+CREATE INDEX IF NOT EXISTS store_ticket_image_expiry ON store_ticket_images(expires_at) WHERE message_id IS NULL;
 `;
