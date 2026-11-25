@@ -125,8 +125,9 @@ def vhost_plan(files):
     root = Path(roots[0]).resolve()
     if not (root / 'index.html').is_file() or root in [Path('/'), Path('/var'), Path('/var/www'), Path('/var/lib')]:
         raise ValueError(f'Existing site index not found in expected root: {root}')
-    if any(part.startswith('/shop') or part == '/index.html' for loc in b['locations'] for part in loc):
-        raise ValueError('An existing inline /shop or /index.html location would conflict with the installer.')
+    if any(part.startswith('/shop') or part in ('/index.html', '/account.html', '/prices.html')
+           for loc in b['locations'] for part in loc):
+        raise ValueError('An existing inline location conflicts with the store routes.')
     edits = {}
     additions = [(apex, INCLUDE), (www, REDIRECT)]
     if add_alias:
@@ -219,7 +220,9 @@ def main(archive):
             bundle.extractall(work, filter='data')
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
-        if not all(path.is_file() for path in (source / 'package-lock.json', public / 'index.html', public / 'store.js', public / 'store.css')):
+        required = [source / 'package-lock.json', *(public / name for name in (
+            'index.html', 'account.html', 'prices.html', 'store.js', 'store.css', 'prices.js', 'server-room.webp'))]
+        if not all(path.is_file() for path in required):
             raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
             raise ValueError('Unexpected symbolic link in the installation paths.')

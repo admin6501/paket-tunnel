@@ -3,15 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0;url=/#tariffs">
-  <link rel="canonical" href="https://asan-gozar.ir/">
-  <link rel="stylesheet" href="/style.css">
-  <title>تعرفه‌ها | آسان‌گذر</title>
+  <meta name="description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
+  <meta name="theme-color" content="#080d19">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>بسته‌ها و تعرفه‌ها | آسان‌گذر</title>
+  <link rel="canonical" href="https://asan-gozar.ir/prices.html">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css?v=3">
+  <link rel="stylesheet" href="/store.css?v=3">
+  <script src="/script.js?v=3" defer></script>
+  <script src="/prices.js?v=3" defer></script>
 </head>
-<body>
-  <main class="wrap page-hero">
-    <h1>تعرفه‌های آسان‌گذر</h1>
-    <a class="btn" href="/#tariffs">مشاهده بسته‌ها و قیمت روز</a>
+<body class="prices-page">
+  <a class="skip-link" href="#main">رفتن به محتوای اصلی</a>
+  <header class="top">
+    <a class="logo" href="/" aria-label="آسان‌گذر، خانه"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
+    <nav aria-label="ناوبری اصلی" class="nav" id="mainNav">
+      <a href="/services.html">سرویس‌ها</a>
+      <a href="/prices.html" aria-current="page">تعرفه‌ها</a>
+      <a href="/status.html">وضعیت سرویس‌ها</a>
+      <a href="/faq.html">راهنما</a>
+    </nav>
+    <div class="actions">
+      <a class="account-link" id="siteAccount" href="/account.html">ورود به حساب</a>
+      <button aria-label="تغییر تم" aria-pressed="false" class="theme" id="themeToggle" type="button">روشن</button>
+      <button aria-controls="mainNav" aria-expanded="false" class="menu" id="menuToggle" type="button">منو</button>
+    </div>
+  </header>
+  <main id="main" class="wrap catalog-page" tabindex="-1">
+    <div class="catalog-intro store-section-heading">
+      <div>
+        <h1>بسته‌ها و تعرفه‌ها</h1>
+        <p>بسته‌ها را بر اساس نوع سرویس و مدت اعتبار مقایسه کنید.</p>
+      </div>
+      <a class="store-primary" href="/account.html">خرید از حساب کاربری</a>
+    </div>
+    <section class="catalog" aria-label="فهرست بسته‌های فروشگاه">
+      <div id="catalog-filters" class="catalog-filters" hidden>
+        <div><label for="plan-category">نوع سرویس</label><select id="plan-category"></select></div>
+        <div><label for="plan-duration">مدت اعتبار</label><select id="plan-duration"></select></div>
+      </div>
+      <p id="catalog-status" role="status">در حال دریافت تعرفه‌ها…</p>
+      <ul id="catalog-plans" class="plan-grid" aria-label="بسته‌های موجود"></ul>
+      <button type="button" id="catalog-more" class="store-outline" hidden>نمایش بسته‌های بیشتر</button>
+      <noscript><p>برای دیدن تعرفه‌های روز، جاوااسکریپت را فعال کنید.</p></noscript>
+    </section>
   </main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <a class="logo" href="/"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
+      <div class="footer-links">
+        <a href="/services.html">سرویس‌ها</a><a href="/network.html">زیرساخت</a><a href="/status.html">وضعیت سرویس‌ها</a><a href="/contact.html">پشتیبانی</a>
+      </div>
+      <small>تمامی حقوق برای آسان‌گذر محفوظ است.</small>
+    </div>
+  </footer>
 </body>
 </html>

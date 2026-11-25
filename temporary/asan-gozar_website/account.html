@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
+  <meta name="theme-color" content="#080d19">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>حساب کاربری | آسان‌گذر</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css?v=3">
+  <link rel="stylesheet" href="/store.css?v=3">
+  <script src="/script.js?v=3" defer></script>
+  <script src="/store.js?v=3" defer></script>
+</head>
+<body class="account-page">
+  <a class="skip-link" href="#main">رفتن به محتوای اصلی</a>
+  <header class="top">
+    <a class="logo" href="/" aria-label="آسان‌گذر، خانه"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
+    <nav aria-label="ناوبری اصلی" class="nav" id="mainNav">
+      <a href="/services.html">سرویس‌ها</a>
+      <a href="/prices.html">تعرفه‌ها</a>
+      <a href="/status.html">وضعیت سرویس‌ها</a>
+      <a href="/faq.html">راهنما</a>
+    </nav>
+    <div class="actions">
+      <a class="account-link" id="siteAccount" href="/account.html" aria-current="page">ورود به حساب</a>
+      <button aria-label="تغییر تم" aria-pressed="false" class="theme" id="themeToggle" type="button">روشن</button>
+      <button aria-controls="mainNav" aria-expanded="false" class="menu" id="menuToggle" type="button">منو</button>
+    </div>
+  </header>
+  <main id="main" class="wrap account-layout" tabindex="-1">
+    <section id="app" class="workspace" aria-labelledby="app-title" aria-busy="true">
+      <h1 id="app-title">حساب کاربری</h1>
+      <p id="status" role="status"></p>
+      <section id="login" hidden aria-labelledby="login-title">
+        <h2 id="login-title">ورود به حساب</h2>
+        <form id="auth" class="auth-form">
+          <div id="signup-name" hidden>
+            <label for="display-name">نام نمایشی</label>
+            <input id="display-name" autocomplete="nickname" maxlength="80">
+          </div>
+          <div>
+            <label for="username">نام کاربری</label>
+            <input id="username" dir="ltr" autocomplete="username" maxlength="32" required>
+          </div>
+          <div>
+            <label for="password">رمز عبور</label>
+            <input id="password" dir="ltr" type="password" autocomplete="current-password" required minlength="14">
+          </div>
+          <div class="actions">
+            <button type="submit" id="auth-submit">ورود</button>
+            <button type="button" class="secondary" id="toggle-signup">ساخت حساب</button>
+          </div>
+        </form>
+      </section>
+      <section id="account" hidden aria-label="حساب فروشگاه">
+        <div class="actions">
+          <button type="button" id="home" class="secondary">منوی فروشگاه</button>
+          <button type="button" id="inbox-open" class="secondary">صندوق پیام</button>
+          <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
+          <button type="button" id="password-open" class="secondary" aria-controls="password-change" aria-expanded="false">تغییر رمز عبور</button>
+          <button type="button" id="logout" class="secondary logout">خروج</button>
+        </div>
+        <section id="password-change" hidden aria-labelledby="password-title">
+          <h3 id="password-title">تغییر رمز عبور حساب</h3>
+          <p>رمز جدید دست‌کم ۱۴ نویسه داشته باشد. پس از ذخیره، دوباره وارد حساب شوید.</p>
+          <form id="password-form" class="auth-form">
+            <div>
+              <label for="current-password">رمز فعلی</label>
+              <input id="current-password" dir="ltr" type="password" autocomplete="current-password" required>
+            </div>
+            <div>
+              <label for="new-password">رمز جدید</label>
+              <input id="new-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+            </div>
+            <div>
+              <label for="repeat-password">تکرار رمز جدید</label>
+              <input id="repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+            </div>
+            <div class="actions">
+              <button type="submit">ذخیره رمز جدید</button>
+              <button type="button" id="password-cancel" class="secondary">انصراف</button>
+            </div>
+          </form>
+        </section>
+        <section id="password-reset" hidden aria-labelledby="reset-title">
+          <h3 id="reset-title">بازنشانی رمز کاربر</h3>
+          <p id="reset-user"></p>
+          <form id="reset-form" class="auth-form">
+            <div>
+              <label for="reset-admin-password">رمز فعلی حساب مدیر</label>
+              <input id="reset-admin-password" dir="ltr" type="password" autocomplete="current-password" required>
+            </div>
+            <div>
+              <label for="reset-new-password">رمز جدید کاربر</label>
+              <input id="reset-new-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+            </div>
+            <div>
+              <label for="reset-repeat-password">تکرار رمز جدید کاربر</label>
+              <input id="reset-repeat-password" dir="ltr" type="password" autocomplete="new-password" minlength="14" required>
+            </div>
+            <div class="actions">
+              <button type="submit">ذخیره و خروج کاربر از حساب</button>
+              <button type="button" id="reset-cancel" class="secondary">انصراف</button>
+            </div>
+          </form>
+        </section>
+        <section id="backup-panel" hidden aria-labelledby="backup-title">
+          <h3 id="backup-title">پشتیبان‌گیری و بازیابی فروشگاه</h3>
+          <p>فایل رمزنگاری‌شده شامل حساب‌ها، سفارش‌ها، کیف پول، بسته‌ها و تنظیمات فروشگاه است. برای بازیابی به همین کلید نصب نیاز است.</p>
+          <div class="backup-forms">
+            <form id="backup-download" class="auth-form">
+              <h4>دانلود نسخهٔ پشتیبان</h4>
+              <div>
+                <label for="backup-password">رمز فعلی مدیر اصلی</label>
+                <input id="backup-password" dir="ltr" type="password" autocomplete="current-password" required>
+              </div>
+              <div class="actions"><button type="submit">دانلود فایل پشتیبان</button></div>
+            </form>
+            <form id="backup-restore" class="auth-form">
+              <h4>بازیابی نسخهٔ پشتیبان</h4>
+              <p>بازیابی، داده‌های فعلی فروشگاه را جایگزین می‌کند و همه حساب‌ها را خارج می‌کند. تغییرات پنل VPN جداگانه پیگیری می‌شوند.</p>
+              <div>
+                <label for="backup-file">فایل پشتیبان، حداکثر ۶۴ مگابایت</label>
+                <input id="backup-file" type="file" accept=".agbackup" required>
+              </div>
+              <div>
+                <label for="restore-password">رمز فعلی مدیر اصلی</label>
+                <input id="restore-password" dir="ltr" type="password" autocomplete="current-password" required>
+              </div>
+              <div class="actions"><button type="submit">جایگزینی داده‌های فعلی</button></div>
+            </form>
+          </div>
+          <button type="button" id="backup-close" class="secondary">بازگشت به پنل</button>
+        </section>
+        <section id="notice-editor" hidden aria-labelledby="notice-editor-title">
+          <h2 id="notice-editor-title">اطلاعیه بالای سایت</h2>
+          <form id="notice-form" class="auth-form">
+            <label for="notice-kind">نوع اطلاعیه</label>
+            <select id="notice-kind">
+              <option value="outage">اختلال</option>
+              <option value="maintenance">تعمیر و نگهداری</option>
+              <option value="notice">اطلاع‌رسانی</option>
+            </select>
+            <label for="notice-heading">عنوان</label>
+            <input id="notice-heading" maxlength="100">
+            <label for="notice-message">متن اطلاعیه</label>
+            <textarea id="notice-message" maxlength="1500" rows="5"></textarea>
+            <label class="check-label"><input id="notice-active" type="checkbox"> نمایش در بالای سایت</label>
+            <div class="actions">
+              <button type="submit">ذخیره اطلاعیه</button>
+              <button type="button" id="notice-cancel" class="secondary">بازگشت به پنل</button>
+            </div>
+          </form>
+        </section>
+        <section id="inbox" hidden aria-labelledby="inbox-title">
+          <h2 id="inbox-title">صندوق پیام سایت</h2>
+          <div id="inbox-items" aria-live="polite"></div>
+          <div class="actions">
+            <button type="button" class="secondary" id="inbox-more" hidden>پیام‌های قدیمی‌تر</button>
+            <button type="button" class="secondary" id="inbox-read" hidden>علامت‌گذاری به‌عنوان خوانده‌شده</button>
+          </div>
+        </section>
+        <div id="messages" aria-live="polite"></div>
+        <form id="reply" hidden>
+          <label for="reply-value" id="reply-label">پاسخ</label>
+          <div class="form-row">
+            <textarea id="reply-value" rows="3" maxlength="3500"></textarea>
+            <input id="reply-secret" type="password" aria-labelledby="reply-label" maxlength="3500" autocomplete="off" hidden>
+            <input id="reply-image" aria-labelledby="reply-label" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+            <button type="submit">ارسال</button>
+          </div>
+        </form>
+      </section>
+      <noscript><p>برای استفاده از فروشگاه، جاوااسکریپت را فعال کن.</p></noscript>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <a class="logo" href="/"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
+      <div class="footer-links">
+        <a href="/services.html">سرویس‌ها</a><a href="/network.html">زیرساخت</a><a href="/status.html">وضعیت سرویس‌ها</a><a href="/contact.html">پشتیبانی</a>
+      </div>
+      <small>تمامی حقوق برای آسان‌گذر محفوظ است.</small>
+    </div>
+  </footer>
+</body>
+</html>

@@ -69,6 +69,29 @@ function browser(env, ip) {
 const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
 const image = Buffer.from(testJPEG).toString('base64');
 
+test('the optional public notice can only be edited by a store admin', async t => {
+  const { env } = await fixture(t);
+  const guest = browser(env, '192.0.2.90');
+  const admin = browser(env, '192.0.2.91');
+  const notice = { active: true, kind: 'outage', title: 'اختلال موقت', message: 'در حال بررسی اتصال از سمت شبکه هستیم.' };
+  assert.deepEqual((await guest.request('notice')).data, { notice: null });
+  assert.equal((await guest.request('admin/notice', notice)).status, 401);
+  assert.equal((await guest.request('register', { name: 'Customer', username: 'buyer', password })).status, 200);
+  assert.equal((await guest.request('admin/notice')).status, 403);
+  assert.equal((await guest.request('admin/notice', notice)).status, 403);
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  await admin.init();
+  await admin.press('admin:root');
+  assert.ok(admin.buttons().includes('web:notice'));
+  assert.equal((await admin.request('admin/notice', { ...notice, title: '' })).status, 400);
+  assert.equal((await admin.request('admin/notice', notice, 'https://other.example')).status, 403);
+  assert.deepEqual((await admin.request('admin/notice', { ...notice, title: '⚠️ ' + notice.title })).data, { notice });
+  assert.deepEqual((await guest.request('notice')).data, { notice });
+  assert.equal((await admin.request('admin/notice', { ...notice, active: false })).status, 200);
+  assert.deepEqual((await guest.request('notice')).data, { notice: null });
+  assert.deepEqual((await admin.request('admin/notice')).data, { notice: { ...notice, active: false } });
+});
+
 test('public catalogue reflects the price set in the admin panel', async t => {
   const { sqlite, env } = await fixture(t);
   sqlite.exec(`INSERT INTO store_categories(id,name,group_ids) VALUES(1,'Standard','[1]');

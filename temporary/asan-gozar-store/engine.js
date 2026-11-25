@@ -1491,7 +1491,7 @@ async function handleAdminUICallback(c, cq, answer) {
   if (d === "admin:root") {
     delete st.admin_ui_step; delete st.admin_ui_key;
     const keyboard = adminHomeKb();
-    if (env.WEB_STATE) keyboard.inline_keyboard.unshift([btn('فیش‌های در انتظار', 'web:orders')]);
+    if (env.WEB_STATE) keyboard.inline_keyboard.unshift([btn('فیش‌های در انتظار', 'web:orders'), btn('اطلاعیه بالای سایت', 'web:notice')]);
     if (env.WEB_STATE && owner) keyboard.inline_keyboard.push([btn('پشتیبان‌گیری و بازیابی', 'web:backup')]);
     return renderAdmin("🛠 <b>پنل مدیریت فروشگاه</b>\n\nبخش موردنظر را انتخاب کنید:", keyboard);
   }

@@ -3,6 +3,10 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const body = document.body;
+  if (body.classList.contains('site-home')) {
+    const destination = { '#app': '/account.html', '#tariffs': '/prices.html' }[location.hash];
+    if (destination) { location.replace(destination); return; }
+  }
   const themeButton = $('themeToggle');
   const menuButton = $('menuToggle');
   const nav = $('mainNav');
@@ -11,12 +15,12 @@
   const syncAccount = signedIn => {
     if (accountLink) accountLink.textContent = signedIn ? 'حساب من' : 'ورود به حساب';
   };
-  if (body.classList.contains('shop-page')) {
+  if (body.classList.contains('account-page')) {
     document.addEventListener('shop:session', event => syncAccount(event.detail.signedIn));
   } else if (accountLink) {
     window.addEventListener('pageshow', async () => {
       try {
-        const response = await fetch('/shop/api/session', { cache: 'no-store' });
+        const response = await fetch('/shop/api/session', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
         syncAccount(response.ok && (await response.json()).signedIn === true);
       } catch { syncAccount(false); }
     });
@@ -56,7 +60,7 @@
     }
   });
   document.addEventListener('keydown', e => {
-    if (e.key !== 'Escape' || $('noticeDialog')?.open || !nav?.classList.contains('open')) return;
+    if (e.key !== 'Escape' || !nav?.classList.contains('open')) return;
     closeMenu();
     menuButton?.focus();
   });
@@ -84,26 +88,60 @@
     filterFaq();
   }
 
-  // پنجره اطلاعیه: فقط معرفی کانال رسمی، بدون نمایش تخفیف یا خبر ساختگی
-  const dialog = $('noticeDialog'), openNotice = $('noticeOpen'), closeNotice = $('noticeClose');
-  const openDialog = () => {
-    if (dialog && !dialog.open) dialog.showModal();
-  };
-  const closeDialog = () => dialog?.close();
-  openNotice?.addEventListener('click', openDialog);
-  closeNotice?.addEventListener('click', closeDialog);
-  dialog?.addEventListener('click', e => { if (e.target === dialog) closeDialog(); });
-  try {
-    const last = Number(localStorage.getItem('ag-notice-time') || 0);
-    if (dialog && Date.now() - last > 7 * 24 * 60 * 60 * 1000) {
-      window.setTimeout(() => {
-        if (document.visibilityState === 'visible') {
-          openDialog();
-          localStorage.setItem('ag-notice-time', String(Date.now()));
-        }
-      }, 9000);
+  const header = document.querySelector('header.top');
+  const banner = document.createElement('aside');
+  banner.className = 'site-notice';
+  banner.hidden = true;
+  banner.setAttribute('aria-label', 'اطلاعیه سایت');
+  header?.after(banner);
+  const noticeType = { outage: 'اختلال', maintenance: 'تعمیر و نگهداری', notice: 'اطلاعیه' };
+  let latestNoticeRequest = 0;
+
+  async function refreshNotice() {
+    const request = ++latestNoticeRequest;
+    const report = $('status-report');
+    try {
+      const response = await fetch('/shop/api/notice', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error('Notice unavailable');
+      const { notice } = await response.json();
+      if (request !== latestNoticeRequest) return;
+      banner.hidden = !notice;
+      banner.replaceChildren();
+      if (!notice) {
+        if (report) report.textContent = 'در حال حاضر اطلاعیه‌ای منتشر نشده است.';
+        return;
+      }
+      banner.dataset.kind = notice.kind;
+      const row = document.createElement('div');
+      row.className = 'wrap notice-row';
+      const kind = document.createElement('span');
+      kind.className = 'notice-type';
+      kind.textContent = noticeType[notice.kind];
+      const headline = document.createElement('strong');
+      headline.textContent = notice.title;
+      row.append(kind, headline);
+      if (report) {
+        const title = document.createElement('h2');
+        title.textContent = notice.title;
+        const text = document.createElement('p');
+        text.textContent = notice.message;
+        report.replaceChildren(title, text);
+      } else {
+        const link = document.createElement('a');
+        link.href = '/status.html#status-report';
+        link.textContent = 'جزئیات اطلاعیه';
+        row.append(link);
+      }
+      banner.append(row);
+    } catch {
+      if (request !== latestNoticeRequest) return;
+      banner.hidden = true;
+      if (report) report.textContent = 'در حال حاضر دریافت اطلاعیه‌ها امکان‌پذیر نیست.';
     }
-  } catch (_) {}
+  }
+
+  window.addEventListener('pageshow', refreshNotice);
+  document.addEventListener('shop:notice', refreshNotice);
 
   // بازگشت به بالای صفحه
   const topButton = $('backToTop');
