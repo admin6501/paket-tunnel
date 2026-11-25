@@ -13,9 +13,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=3">
-  <link rel="stylesheet" href="/store.css?v=3">
-  <script src="/script.js?v=3" defer></script>
+  <link rel="stylesheet" href="/style.css?v=4">
+  <link rel="stylesheet" href="/store.css?v=4">
+  <script src="/script.js?v=4" defer></script>
+  <script src="/storefront.js?v=4" defer></script>
 </head>
 <body class="site-home">
   <a class="skip-link" href="#main">رفتن به محتوای اصلی</a>
@@ -23,7 +24,7 @@
     <a class="logo" href="/" aria-label="آسان‌گذر، خانه"><span class="logo-mark" aria-hidden="true">AG</span><b>آسان‌گذر</b></a>
     <nav aria-label="ناوبری اصلی" class="nav" id="mainNav">
       <a href="/services.html">سرویس‌ها</a>
-      <a href="/prices.html">تعرفه‌ها</a>
+      <a href="/prices.html">فروشگاه و تعرفه‌ها</a>
       <a href="/status.html">وضعیت سرویس‌ها</a>
       <a href="/faq.html">راهنما</a>
     </nav>
@@ -36,16 +37,28 @@
   <main id="main" class="wrap" tabindex="-1">
     <section class="store-hero" aria-labelledby="hero-title">
       <div class="store-hero-copy">
-        <h1 id="hero-title">اشتراک شخصی<br>و خدمات شبکه</h1>
-        <p>از سرویس شخصی تا پنل نمایندگی و زیرساخت. تعرفه‌ها را مقایسه کنید و اشتراک خود را از حساب آسان‌گذر مدیریت کنید.</p>
+        <h1 id="hero-title">فروشگاه آسان‌گذر</h1>
+        <p>اشتراک بخرید، سرویس‌تان را تمدید کنید و لینک‌های خود را از حساب کاربری بگیرید.</p>
         <div class="hero-links">
-          <a class="store-primary" href="/prices.html">مشاهده بسته‌ها</a>
-          <a class="store-outline" href="/services.html">آشنایی با سرویس‌ها</a>
+          <a class="store-primary" href="/prices.html">انتخاب و خرید بسته</a>
+          <a class="store-outline" href="/account.html">ورود و مدیریت اشتراک</a>
         </div>
       </div>
       <figure class="store-hero-photo">
         <img src="/server-room.webp" alt="رک‌های سرور و کابل‌های شبکه در یک مرکز داده" width="1200" height="673" fetchpriority="high">
       </figure>
+    </section>
+
+    <section class="featured-store" aria-labelledby="featured-title">
+      <div class="store-section-heading">
+        <div>
+          <h2 id="featured-title">بسته‌های فروشگاه</h2>
+          <p>قیمت شروع دسته‌های فعال</p>
+        </div>
+        <a class="store-outline" href="/prices.html">همهٔ تعرفه‌ها</a>
+      </div>
+      <div id="featured-plans" class="featured-grid" hidden></div>
+      <p id="featured-status" role="status"></p>
     </section>
 
     <section class="service-overview" aria-labelledby="services-title">

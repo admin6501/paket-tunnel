@@ -293,6 +293,16 @@ export async function webShopRequest(request, env, update) {
     return json({ plans });
   }
 
+  if (route === 'featured' && request.method === 'GET') {
+    const plans = await all(env, `WITH ranked AS (
+      SELECT c.id AS categoryId,c.name AS category,p.gb,p.price,s.days,
+      ROW_NUMBER() OVER(PARTITION BY c.id ORDER BY p.price,p.sort,p.key) AS position
+      FROM plans p JOIN store_plan_specs s ON s.plan_key=p.key JOIN store_categories c ON c.id=s.category_id
+      WHERE c.active=1 AND p.gb>0 AND p.price>=0
+    ) SELECT categoryId,category,gb,price,days FROM ranked WHERE position=1 ORDER BY categoryId LIMIT 3`);
+    return json({ plans });
+  }
+
   if (['register','login'].includes(route) && request.method === 'POST') {
     if (await limited(env, `login:${ip}`, 8)) return json({ error: 'بعد از یک دقیقه دوباره تلاش کنید.' }, 429);
     const body = await readBody(request);

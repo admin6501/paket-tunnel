@@ -190,14 +190,50 @@ def node_tools(work):
     return RUNTIME / 'bin/node', RUNTIME / 'bin/npm'
 
 
+def get(url, *options):
+    result = subprocess.run(['curl', '-fsS', '--noproxy', '*', '--connect-timeout', '2', '--max-time', '4',
+                             *options, url], capture_output=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+def api_matches(origin, options=()):
+    for route, key, expected in [('state', 'signedIn', bool), ('notice', 'notice', (dict, type(None))),
+                                 ('featured', 'plans', list)]:
+        body = get(f'{origin}/shop/api/{route}', *options)
+        try:
+            if not isinstance(json.loads(body)[key], expected):
+                return False
+        except (TypeError, ValueError, KeyError):
+            return False
+    return True
+
+
 def service_ready():
     for _ in range(30):
-        result = subprocess.run(['curl', '-fsS', '--noproxy', '*', '--max-time', '1',
-                                 'http://127.0.0.1:8787/shop/api/state'], capture_output=True, text=True)
-        if result.returncode == 0 and json.loads(result.stdout).get('signedIn') is False:
+        if api_matches('http://127.0.0.1:8787'):
             return
         time.sleep(.5)
-    raise RuntimeError('Store API did not start. Check journalctl -u asan-gozar-store -n 50.')
+    raise RuntimeError('The new store API did not start. Check journalctl -u asan-gozar-store -n 50.')
+
+
+def served_release(public, domain=DOMAIN, port=443):
+    origin = f'https://{domain}:{port}'
+    files = {'/': 'index.html', '/account.html': 'account.html', '/prices.html': 'prices.html',
+             '/storefront.js': 'storefront.js', '/store.css': 'store.css'}
+    assets = {route: (public / name).read_bytes() for route, name in files.items()}
+    failed = '/'
+    loopback = ('--resolve', f'{domain}:{port}:127.0.0.1')
+    for options in (loopback, (), loopback):
+        for route, expected in assets.items():
+            if get(origin + route, *options) != expected:
+                failed = route
+                break
+        else:
+            if api_matches(origin, options):
+                return
+            failed = '/shop/api/'
+        time.sleep(.5)
+    raise RuntimeError(f'HTTPS did not serve the new release at {failed}. Check the active Nginx virtual host.')
 
 
 def main(archive):
@@ -208,6 +244,9 @@ def main(archive):
             raise ValueError(f'Missing command: {cmd}')
     dump = run('nginx', '-T', capture_output=True, text=True)
     root, changes = vhost_plan(active_files(dump.stdout))
+    with archive.open('rb') as bundle_file:
+        bundle_id = hashlib.file_digest(bundle_file, 'sha256').hexdigest()[:12]
+    print(f'Installing store release {bundle_id}', flush=True)
     print(f'Using existing site root {root}', flush=True)
     if CONFIG.exists():
         conf = json.loads(CONFIG.read_text())
@@ -221,7 +260,7 @@ def main(archive):
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
         required = [source / 'package-lock.json', *(public / name for name in (
-            'index.html', 'account.html', 'prices.html', 'store.js', 'store.css', 'prices.js', 'server-room.webp'))]
+            'index.html', 'account.html', 'prices.html', 'store.js', 'store.css', 'prices.js', 'storefront.js', 'server-room.webp'))]
         if not all(path.is_file() for path in required):
             raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
@@ -247,7 +286,14 @@ def main(archive):
         else:
             username = owner[0]
         node, npm = node_tools(work)
-        run(str(node), str(npm), 'ci', '--omit=dev', '--ignore-scripts', cwd=source)
+        installed_lock = APP / 'package-lock.json'
+        reuse = (installed_lock.is_file() and installed_lock.read_bytes() == (source / 'package-lock.json').read_bytes()
+                 and subprocess.run([str(node), '-e', 'require(require.resolve("qrcode", { paths: [process.argv[1]] }))',
+                                     str(APP)], capture_output=True).returncode == 0)
+        if reuse:
+            print('Using the installed Node dependencies.', flush=True)
+        else:
+            run(str(node), str(npm), 'ci', '--omit=dev', '--ignore-scripts', cwd=source)
         try:
             account = pwd.getpwnam(USER)
         except KeyError:
@@ -281,6 +327,7 @@ def main(archive):
         SNIPPET.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         old_snippet = SNIPPET.read_bytes() if SNIPPET.exists() else None
         applied = []
+        replaced = {}
         try:
             run('install', '-m', '0644', str(work / 'asan-gozar-shop.nginx.conf'), str(SNIPPET))
             for path, (_, updated) in changes.items():
@@ -294,18 +341,28 @@ def main(archive):
                 elif asset.name != 'README.txt':
                     if dest.is_symlink() or any(parent.is_symlink() for parent in dest.parents if parent != root and root in parent.parents):
                         raise ValueError(f'Refusing linked site destination: {dest}')
+                    replaced[dest] = (dest.read_bytes(), dest.stat()) if dest.is_file() else None
                     run('install', '-m', '0644', str(asset), str(dest))
             run('systemctl', 'reload', 'nginx')
+            served_release(public)
         except Exception:
+            for path, old in reversed(replaced.items()):
+                if old is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    contents, metadata = old
+                    path.write_bytes(contents)
+                    os.chown(path, metadata.st_uid, metadata.st_gid)
+                    path.chmod(stat.S_IMODE(metadata.st_mode))
             for path in reversed(applied):
                 atomic_text(path, changes[path][0])
             if old_snippet is None:
                 SNIPPET.unlink(missing_ok=True)
             else:
                 SNIPPET.write_bytes(old_snippet)
+            subprocess.run(['systemctl', 'reload', 'nginx'], check=False)
             raise
-    print(f'Installed. Store: https://{DOMAIN}/  |  Admin username: {username}')
-    print(f'Check: curl -fsS https://{DOMAIN}/shop/api/state')
+    print(f'Installed and verified over HTTPS ({bundle_id}). Store: https://{DOMAIN}/  |  Admin username: {username}')
 
 
 if __name__ == '__main__':
