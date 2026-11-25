@@ -105,7 +105,13 @@ test('ticket queue routes private threads, replies, assignments and existing inb
   assert.equal((await buyer.request('tickets/' + id + '/update', { version: 4, status: 'resolved' })).status, 403);
   assert.equal((await buyer.request('tickets/' + id + '/update', { version: 4, status: 'closed' })).status, 200);
   assert.equal((await buyer.request('tickets/' + id + '/reply', { version: 5, message: 'بسته است' })).status, 409);
-  assert.equal((await buyer.request('tickets/' + id + '/update', { version: 5, status: 'open' })).status, 200);
+  assert.equal((await buyer.request('tickets/' + id + '/update', { version: 5, status: 'open' })).status, 403);
+  assert.equal((await admin.request(base + '/reply', { version: 5, message: 'پاسخ پشتیبانی پس از بستن' })).status, 200);
+  const closed = (await buyer.request('tickets/' + id)).data;
+  assert.equal(closed.ticket.status, 'closed');
+  assert.equal(closed.messages.at(-1).body, 'پاسخ پشتیبانی پس از بستن');
+  assert.equal((await admin.request(base + '/update', { version: 6, status: 'open', department: 3, priority: 'urgent', assignee: owner.id })).status, 200);
+  assert.equal((await buyer.request('tickets/' + id + '/reply', { version: 7, message: 'پاسخ پس از بازگشایی' })).status, 200);
 
   const inactive = { id: 3, name: 'فنی شبکه', description: 'نیاز به بررسی', active: false };
   assert.equal((await admin.request('admin/tickets/departments', inactive)).status, 200);
@@ -177,6 +183,19 @@ test('ticket photos attach atomically, respect separate limits and keep internal
   assert.equal((await buyer.request(base + '/reply', { version: 2, message: '', images: [followUp] })).status, 200);
   assert.deepEqual((await buyer.request(base)).data.messages.at(-1).images, [followUp]);
   assert.deepEqual((await buyer.request(base + '/images/' + first)).data, testJPEG);
+
+  const unrelated = await stranger.request('tickets', { department: 1, subject: 'تیکت دیگر', message: '', images: [other] });
+  assert.equal(unrelated.status, 201);
+  assert.equal((await buyer.request(base + '/delete', { version: 3 })).status, 403);
+  assert.equal((await buyer.request('admin/' + base + '/delete', { version: 3 })).status, 403);
+  assert.equal((await admin.request('admin/' + base + '/delete', { version: 2 })).status, 409);
+  assert.deepEqual((await buyer.request(base + '/images/' + first)).data, testJPEG);
+  assert.equal((await admin.request('admin/' + base + '/delete', { version: 3 })).status, 200);
+  assert.equal((await buyer.request(base)).status, 404);
+  assert.equal((await admin.request('admin/' + base + '/images/' + internal)).status, 404);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM store_ticket_messages WHERE ticket_id=?').get(opened.data.id).n, 0);
+  assert.deepEqual(sqlite.prepare('SELECT id FROM store_ticket_images ORDER BY id').all().map(row => row.id), [other]);
+  assert.equal((await stranger.request('tickets/' + unrelated.data.id)).status, 200);
 });
 
 test('admin branding is quoted safely and published across every store page and icon', async t => {

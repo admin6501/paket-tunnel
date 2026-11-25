@@ -250,7 +250,19 @@ function setupTickets(container, api, perform, returnToMenu, visibleText, upload
       container.querySelector('.ticket-older')?.remove();
       renderMessages(data.messages, true);
     } else {
-      toolbar('#' + number.format(current.id) + ' · ' + current.subject, [button('بازگشت به تیکت‌ها', () => list())]);
+      const actions = [button('بازگشت به تیکت‌ها', () => list())];
+      if (staff) {
+        const { version } = current;
+        const remove = button('حذف تیکت', async () => {
+          if (!window.confirm('تیکت شماره ' + number.format(id) + ' به همراه پیام‌ها و پیوست‌هایش برای همیشه حذف شود؟')) return;
+          await api(route('/' + id + '/delete'), { version });
+          await list();
+          return 'تیکت حذف شد.';
+        });
+        remove.classList.add('ticket-delete');
+        actions.push(remove);
+      }
+      toolbar('#' + number.format(current.id) + ' · ' + current.subject, actions);
       container.append(block('p', current.department + ' · ' + statuses[current.status] + ' · اولویت ' + priorities[current.priority] +
         (staff ? ' · مشتری ' + current.customer : ''), 'ticket-meta'));
       renderMessages(data.messages, false);
@@ -286,28 +298,36 @@ function setupTickets(container, api, perform, returnToMenu, visibleText, upload
         return 'تغییرات تیکت ذخیره شد.';
       });
       container.append(controls);
-    } else {
-      if (!isFinished) {
-        const priority = select(Object.entries(priorities), current.priority);
-        const priorityForm = form(field('اولویت', priority), submit('ذخیرهٔ اولویت'));
-        priorityForm.classList.add('ticket-filters');
-        onSubmit(priorityForm, async () => {
-          await api(route('/' + id + '/update'), { version, priority: priority.value });
+      if (isFinished) {
+        const { department_id, assignee_id, priority: currentPriority } = current;
+        container.append(button('بازگشایی تیکت', async () => {
+          await api(route('/' + id + '/update'), { version, status: 'open', department: department_id,
+            priority: currentPriority, assignee: assignee_id });
           await openThread(id);
-          return 'اولویت تیکت ذخیره شد.';
-        });
-        container.append(priorityForm);
+          return 'تیکت باز شد.';
+        }));
       }
-      const nextStatus = isFinished ? 'open' : 'closed';
-      container.append(button(isFinished ? 'بازگشایی تیکت' : 'بستن تیکت', async () => {
-        await api(route('/' + id + '/update'), { version, status: nextStatus });
+    } else {
+      if (isFinished) {
+        container.append(block('p', 'فقط پشتیبانی می‌تواند این تیکت را بازگشایی کند.', 'ticket-meta'));
+        return;
+      }
+      const priority = select(Object.entries(priorities), current.priority);
+      const priorityForm = form(field('اولویت', priority), submit('ذخیرهٔ اولویت'));
+      priorityForm.classList.add('ticket-filters');
+      onSubmit(priorityForm, async () => {
+        await api(route('/' + id + '/update'), { version, priority: priority.value });
+        await openThread(id);
+        return 'اولویت تیکت ذخیره شد.';
+      });
+      container.append(priorityForm, button('بستن تیکت', async () => {
+        await api(route('/' + id + '/update'), { version, status: 'closed' });
         await openThread(id);
       }));
     }
-    if (isFinished && !staff) return;
     const reply = input('', 4000, true);
     const attachments = attachmentFields();
-    const mode = select(isFinished ? [['note', 'یادداشت داخلی']] : [['reply', 'پاسخ به مشتری'], ['note', 'یادداشت داخلی']]);
+    const mode = select([['reply', 'پاسخ به مشتری'], ['note', 'یادداشت داخلی']]);
     const editor = form(...(staff ? [field('نوع پیام', mode)] : []), field('متن پیام', reply), ...attachments.elements, submit('ارسال'));
     onSubmit(editor, async () => {
       const images = await attachments.upload(reply.value);
