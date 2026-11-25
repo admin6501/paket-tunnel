@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="/store.css?v=8">
   <script src="/script.js?v=5" defer></script>
   <script src="/tickets.js?v=8" defer></script>
-  <script src="/store.js?v=9" defer></script>
+  <script src="/store.js?v=10" defer></script>
 
   <meta property="og:description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
   <meta property="og:site_name" content="آسان‌گذر">
@@ -42,6 +42,8 @@
   <main id="main" class="wrap account-layout" tabindex="-1">
     <section id="app" class="workspace" aria-labelledby="app-title" aria-busy="true">
       <h1 id="app-title">حساب کاربری</h1>
+      <button type="button" class="secondary" id="app-install" aria-describedby="app-install-hint" hidden>نصب برنامه روی گوشی</button>
+      <p id="app-install-hint" role="status"></p>
       <p id="status" role="status"></p>
       <section id="login" hidden aria-labelledby="login-title">
         <h2 id="login-title">ورود به حساب</h2>
@@ -69,6 +71,7 @@
           <button type="button" id="home" class="secondary">منوی فروشگاه</button>
           <button type="button" id="tickets-open" class="secondary" aria-controls="ticket-panel">تیکت‌های من</button>
           <button type="button" id="tickets-manage" class="secondary" aria-controls="ticket-panel" hidden>مدیریت تیکت‌ها</button>
+          <button type="button" id="push-open" class="secondary" aria-controls="push-settings" hidden>اعلان‌های برنامه</button>
           <button type="button" id="inbox-open" class="secondary">صندوق پیام</button>
           <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
           <button type="button" id="profile-open" class="secondary" aria-controls="profile-edit" aria-expanded="false">پروفایل</button>
@@ -208,6 +211,17 @@
               <button type="button" id="upload-cancel" class="secondary">بازگشت به تنظیمات</button>
             </div>
           </form>
+        </section>
+        <section id="push-settings" class="settings-editor" hidden aria-labelledby="push-title">
+          <h2 id="push-title">اعلان‌های برنامه</h2>
+          <p>تیکت جدید، پاسخ مشتری و رسیدهای سفارش و شارژ کیف پول به این دستگاه اعلان می‌شوند.</p>
+          <p id="push-status" role="status"></p>
+          <div class="actions">
+            <button id="push-enable" type="button" hidden>فعال‌کردن اعلان‌ها</button>
+            <button id="push-test" type="button" hidden>ارسال اعلان آزمایشی</button>
+            <button id="push-disable" type="button" class="secondary" hidden>غیرفعال‌کردن در این دستگاه</button>
+            <button id="push-close" type="button" class="secondary">بستن</button>
+          </div>
         </section>
         <section id="inbox" hidden aria-labelledby="inbox-title">
           <h2 id="inbox-title">صندوق پیام سایت</h2>

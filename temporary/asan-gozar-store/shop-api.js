@@ -3,6 +3,7 @@ import { deliverToInbox } from './inbox.js';
 import { BACKUP_LIMIT, BackupError } from './backups.mjs';
 import { BRAND_KEY, brandText, readBrand, validBrandName } from './brand.mjs';
 import { ticketRequest } from './tickets.mjs';
+import { pushEndpoint, pushRequest } from './push.mjs';
 import { isJPEG, MAX_IMAGE_KIB, MAX_TICKET_IMAGES, MIN_IMAGE_KIB, parseUploadLimits, privateJPEG, readUploadLimits, UPLOAD_SETTINGS } from './uploads.mjs';
 
 const PREFIX = '/shop/api/';
@@ -10,6 +11,7 @@ const SESSION_COOKIE = '__Host-ag-session';
 const SESSION_TTL = 12 * 60 * 60_000;
 const RECEIPT_TTL = 30 * 24 * 60 * 60_000;
 const TOKEN = /^[a-zA-Z0-9_-]{32}$/;
+const RECEIPT_ACTION = /^web:receipt:(order|topup):([1-9]\d{0,14})$/;
 const BODY_LIMIT = 810_000;
 const TICKET_UPLOAD_TTL = 20 * 60_000;
 const NOTICE_KEY = 'website_notice';
@@ -291,22 +293,25 @@ export async function webShopReview(env, uid, action) {
     buttons.push([{ text: 'پنل مدیریت', callback_data: 'admin:root' }]);
     return { text: items.length ? 'فیش‌های در انتظار بررسی' : 'فیشی در انتظار بررسی نیست.', buttons };
   }
-  const match = /^web:receipt:(order|topup):(\d+)$/.exec(action);
+  const match = RECEIPT_ACTION.exec(action);
   if (!match) return null;
   const [, kind, reference] = match;
   const result = kind === 'order'
-    ? await first(env, "SELECT final_price AS amount,user_id FROM orders WHERE id=? AND status='pending'", Number(reference))
-    : await first(env, "SELECT amount,user_id FROM wallet_topups WHERE id=? AND status='pending'", Number(reference));
+    ? await first(env, 'SELECT final_price AS amount,user_id,status FROM orders WHERE id=?', Number(reference))
+    : await first(env, 'SELECT amount,user_id,status FROM wallet_topups WHERE id=?', Number(reference));
   const receipt = result && await first(env, 'SELECT 1 FROM web_shop_receipts WHERE kind=? AND reference=? AND expires_at>?', kind, Number(reference), Date.now());
-  if (!receipt) return { text: 'این فیش دیگر در انتظار تأیید نیست.', buttons: [[{ text: 'فیش‌ها', callback_data: 'web:orders' }]] };
+  const back = [{ text: 'فیش‌ها', callback_data: 'web:orders' }];
+  if (!receipt) return { text: 'تصویر این فیش در دسترس نیست.', buttons: [back] };
+  const caption = `فیش ${kind === 'order' ? 'سفارش' : 'شارژ'} ${reference}\nکاربر: ${result.user_id}\nمبلغ: ${Number(result.amount).toLocaleString('fa-IR')} تومان`;
+  const image = `${PREFIX}receipt?kind=${kind}&id=${reference}`;
+  if (result.status !== 'pending') return { text: caption + '\nاین فیش دیگر در انتظار تأیید نیست.', image, buttons: [back] };
   return {
-    text: `فیش ${kind === 'order' ? 'سفارش' : 'شارژ'} ${reference}\nکاربر: ${result.user_id}\nمبلغ: ${Number(result.amount).toLocaleString('fa-IR')} تومان`,
-    image: `${PREFIX}receipt?kind=${kind}&id=${reference}`,
+    text: caption, image,
     buttons: [
       kind === 'order'
         ? [{ text: 'تأیید سفارش', callback_data: `approve_${reference}` }, { text: 'رد سفارش', callback_data: `reject_order:${reference}` }]
         : [{ text: 'تأیید شارژ', callback_data: `topup:approve:${reference}` }, { text: 'رد شارژ', callback_data: `topup:reject:${reference}` }],
-      [{ text: 'فیش‌ها', callback_data: 'web:orders' }],
+      back,
     ],
   };
 }
@@ -406,7 +411,10 @@ export async function webShopRequest(request, env, update) {
   const session = sessionKey && await first(env, 'SELECT * FROM web_shop_sessions WHERE token=? AND expires_at>?', sessionKey, now);
   if (!session) return ['state','session'].includes(route) && request.method === 'GET' ? json({ signedIn: false }) : json({ error: 'دوباره وارد شوید.' }, 401);
   if (route === 'logout' && request.method === 'POST') {
-    await run(env, 'UPDATE web_shop_sessions SET expires_at=? WHERE token=?', now, sessionKey);
+    const endpoint = pushEndpoint((await readBody(request))?.pushEndpoint);
+    const statements = [env.DB.prepare('UPDATE web_shop_sessions SET expires_at=? WHERE token=?').bind(now, sessionKey)];
+    if (endpoint) statements.push(env.DB.prepare('DELETE FROM store_push_subscriptions WHERE user_id=? AND endpoint=?').bind(session.user_id, endpoint));
+    await env.DB.batch(statements);
     return json({ signedIn: false }, 200, [cookie(SESSION_COOKIE, '', 0)]);
   }
   const admin = await isAdmin(env, session.user_id);
@@ -419,6 +427,12 @@ export async function webShopRequest(request, env, update) {
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return respondState(env, session);
   if (route === 'profile') return accountProfile(request, env, session);
+  const pushAction = /^admin\/push(?:\/(subscribe|unsubscribe|status|test))?$/.exec(route);
+  if (pushAction && request.method === (pushAction[1] ? 'POST' : 'GET')) {
+    if (!admin) return json({ error: 'دسترسی ندارید.' }, 403);
+    if (pushAction[1] && await limited(env, `push:${session.user_id}`, 25)) return json({ error: 'لطفاً کمی صبر کنید و دوباره تلاش کنید.' }, 429);
+    return pushRequest(env, session.user_id, pushAction[1], pushAction[1] ? await readBody(request, 4096) : null, json);
+  }
   if (route === 'uploads' && request.method === 'GET') {
     return json({ ...await readUploadLimits(env.DB), maxImages: MAX_TICKET_IMAGES, minKiB: MIN_IMAGE_KIB, maxKiB: MAX_IMAGE_KIB });
   }
@@ -501,8 +515,9 @@ export async function webShopRequest(request, env, update) {
   if (body.kind === 'image' && receiptKiB && !image) return json({ error: `تصویر معتبر با حجم حداکثر ${receiptKiB} کیلوبایت انتخاب کنید.` }, 400);
   const typed = typeof body.text === 'string' && body.text.trim().length > 0 && body.text.length <= 3500 &&
     (input === 'password' || !body.text.trimStart().startsWith('/'));
+  const receiptLink = body.kind === 'receipt' && admin && typeof body.action === 'string' && RECEIPT_ACTION.test(body.action);
   const valid = body.kind === 'home' || (body.kind === 'button' && typeof body.action === 'string' && choices.includes(body.action)) ||
-    (body.kind === 'text' && typed && ['text','password'].includes(input)) || (image && input === 'image');
+    (body.kind === 'text' && typed && ['text','password'].includes(input)) || (image && input === 'image') || receiptLink;
   if (!valid) return json({ error: 'ورودی یا گزینه معتبر نیست.' }, 400);
   const locked = await run(env, `UPDATE web_shop_sessions SET busy_until=?,revision=revision+1
     WHERE token=? AND revision=? AND busy_until<=? AND expires_at>?`, now + 5 * 60_000, sessionKey, session.revision, now, now);
@@ -540,7 +555,7 @@ export async function webShopRequest(request, env, update) {
   };
   const chat = { id: user.id, type: 'private' };
   const message = { from: user, chat, message_id: 1 };
-  const event = body.kind === 'button' ? {
+  const event = body.kind === 'button' || receiptLink ? {
     callback_query: { from: user, id: token(), data: body.action, message },
   } : { message: { ...message, ...(image ? { photo: [{ file_id: 'web-shop-receipt' }] } :
     { text: body.kind === 'home' ? '/start' : input === 'password' ? body.text : body.text.trim() }) } };

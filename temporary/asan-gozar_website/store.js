@@ -19,9 +19,11 @@ let nextMessage = null;
 let newestMessage = null;
 let resetTarget = null;
 let panelTrigger = null;
+let pushDevice = null;
 let supportLink = location.hash === '#tickets';
 const supportParams = new URLSearchParams(location.search);
 const linkedTicket = Number(supportParams.get('ticket') || supportParams.get('staffTicket'));
+let linkedReceipt = /^(order|topup):[1-9]\d{0,14}$/.test(supportParams.get('receipt') || '') ? supportParams.get('receipt') : null;
 const tickets = setupTickets(get('ticket-panel'), api, perform, refresh, displayText, uploadTicketImage, imageLimitLabel);
 
 function announce(text = '', error = false) {
@@ -100,6 +102,7 @@ function show(newState) {
   get('login').hidden = state.signedIn;
   get('account').hidden = !state.signedIn;
   get('tickets-manage').hidden = !state.admin;
+  get('push-open').hidden = !state.admin;
   tickets.close();
   closeAccountForms();
   if (!state.signedIn) {
@@ -239,6 +242,10 @@ async function action(body) {
 async function refresh() {
   show(await api('state'));
   if (state.signedIn && !state.messages.length) await action({ kind: 'home' });
+  if (state.signedIn && state.admin && linkedReceipt) {
+    await action({ kind: 'receipt', action: 'web:receipt:' + linkedReceipt });
+    linkedReceipt = null;
+  }
   if (state.signedIn && supportLink) {
     supportLink = false;
     const adminQueue = state.admin && (supportParams.has('staffTicket') || supportParams.get('support') === 'manage');
@@ -263,6 +270,8 @@ function closeAccountForms() {
   get('brand-editor').hidden = true;
   get('profile-edit').hidden = true;
   get('upload-editor').hidden = true;
+  get('push-settings').hidden = true;
+  pushDevice = null;
   get('profile-open').setAttribute('aria-expanded', 'false');
   for (const id of ['password-form', 'reset-form', 'backup-download', 'backup-restore', 'notice-form', 'brand-form', 'profile-form', 'upload-form']) get(id).reset();
   resetTarget = null;
@@ -286,7 +295,82 @@ get('password-open').addEventListener('click', () => {
   openAccountForm('password-change', 'current-password', get('password-open'));
   get('password-open').setAttribute('aria-expanded', 'true');
 });
-for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel', 'profile-cancel', 'upload-cancel']) get(id).addEventListener('click', cancelAccountForm);
+for (const id of ['password-cancel', 'reset-cancel', 'backup-close', 'notice-cancel', 'brand-cancel', 'profile-cancel', 'upload-cancel', 'push-close']) get(id).addEventListener('click', cancelAccountForm);
+
+function pushControls(enabled, message, canEnable = true) {
+  get('push-status').textContent = message;
+  get('push-enable').hidden = enabled || !canEnable;
+  get('push-test').hidden = get('push-disable').hidden = !enabled;
+}
+
+get('push-open').addEventListener('click', event => {
+  const trigger = event.currentTarget;
+  void perform(async () => {
+    openAccountForm('push-settings', 'push-close', trigger);
+    pushControls(false, '', false);
+    if (storeApplePhone && !storeAppInstalled()) {
+      pushControls(false, 'در iPhone یا iPad، برنامه را از Safari به صفحهٔ اصلی اضافه کنید و سپس از همان‌جا وارد شوید.', false);
+      return;
+    }
+    const registration = await storeAppRegistration;
+    if (!registration?.pushManager || !('Notification' in window)) {
+      pushControls(false, 'اعلان پس‌زمینه در این مرورگر در دسترس نیست.', false);
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      pushControls(false, 'اجازهٔ اعلان مسدود است. آن را در تنظیمات مرورگر یا گوشی فعال کنید و دوباره این بخش را باز کنید.', false);
+      return;
+    }
+    const { publicKey } = await api('admin/push');
+    const applicationServerKey = Uint8Array.from(atob(publicKey.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0));
+    let subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      const { enabled } = await api('admin/push/status', { endpoint: subscription.endpoint });
+      const previousKey = new Uint8Array(subscription.options.applicationServerKey);
+      if (!enabled || previousKey.length !== applicationServerKey.length || previousKey.some((byte, i) => byte !== applicationServerKey[i])) {
+        if (enabled) await api('admin/push/unsubscribe', { endpoint: subscription.endpoint });
+        await subscription.unsubscribe();
+        subscription = null;
+      }
+    }
+    pushDevice = { registration, applicationServerKey, subscription };
+    pushControls(Boolean(subscription), subscription ? 'اعلان‌ها روی این دستگاه فعال‌اند.' : 'اعلان‌ها روی این دستگاه فعال نیستند.');
+  }).then(() => { if (!get('push-settings').hidden) get('push-close').focus(); });
+});
+
+get('push-enable').addEventListener('click', () => {
+  if (!pushDevice || busy) return;
+  const device = pushDevice;
+  void perform(async () => {
+    let subscription;
+    try {
+      subscription = await device.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: device.applicationServerKey });
+    } catch {
+      throw new Error('فعال‌سازی اعلان انجام نشد. اجازهٔ اعلان و اتصال اینترنت را بررسی کنید.');
+    }
+    try { await api('admin/push/subscribe', subscription.toJSON()); }
+    catch (error) { await subscription.unsubscribe().catch(() => {}); throw error; }
+    device.subscription = subscription;
+    pushControls(true, 'اعلان‌ها روی این دستگاه فعال‌اند.');
+  });
+});
+
+get('push-test').addEventListener('click', () => {
+  void perform(async () => {
+    await api('admin/push/test', { endpoint: pushDevice.subscription.endpoint });
+    return 'اعلان آزمایشی در صف ارسال قرار گرفت.';
+  });
+});
+
+get('push-disable').addEventListener('click', () => {
+  void perform(async () => {
+    const { subscription } = pushDevice;
+    await api('admin/push/unsubscribe', { endpoint: subscription.endpoint });
+    pushDevice.subscription = null;
+    await subscription.unsubscribe().catch(() => {});
+    pushControls(false, 'اعلان‌ها روی این دستگاه غیرفعال شدند.');
+  });
+});
 
 function editUploadLimits(trigger) {
   void perform(async () => {
@@ -550,7 +634,14 @@ get('home').addEventListener('click', () => {
 get('refresh').addEventListener('click', () => {
   void perform(tickets.visible ? tickets.refresh : get('inbox').hidden ? refresh : loadInbox);
 });
-get('logout').addEventListener('click', () => { void perform(async () => show(await api('logout', {}))); });
+get('logout').addEventListener('click', () => {
+  void perform(async () => {
+    const registration = state.admin && await navigator.serviceWorker?.getRegistration('/').catch(() => null);
+    const subscription = await registration?.pushManager?.getSubscription().catch(() => null);
+    show(await api('logout', { pushEndpoint: subscription?.endpoint }));
+    await subscription?.unsubscribe().catch(() => {});
+  });
+});
 reply.addEventListener('submit', event => {
   event.preventDefault();
   void perform(async () => {

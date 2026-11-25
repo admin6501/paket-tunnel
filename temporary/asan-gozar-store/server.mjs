@@ -9,6 +9,7 @@ import { isWebShopPath, pruneWebShop, webShopRequest } from './shop-api.js';
 import { deliverToInbox } from './inbox.js';
 import { processMessageJobs } from './messages.js';
 import { loadStorePages, webStorePage } from './site.mjs';
+import { createPushConfig, sendPendingPush } from './push.mjs';
 
 process.umask(0o077);
 const config = JSON.parse(readFileSync(process.env.STORE_CONFIG || '/etc/asan-gozar-store/config.json', 'utf8'));
@@ -27,7 +28,8 @@ let requests = 0;
 const backups = createStoreBackups(database, config.secret, () => store, replacement => { store = replacement; },
   () => requests === 1 && tasks.size === 0);
 const pages = loadStorePages(process.env.STORE_WEB_PAGES || fileURLToPath(new URL('./site/', import.meta.url)));
-const env = { STORE_SECRET: config.secret, WEB_SHOP_ORIGIN: origin.origin, WEB_SHOP_BACKUPS: backups, WEB_STORE_PAGES: pages };
+const env = { STORE_SECRET: config.secret, WEB_SHOP_ORIGIN: origin.origin, WEB_SHOP_BACKUPS: backups,
+  WEB_STORE_PAGES: pages, WEB_SHOP_PUSH: createPushConfig(config.secret, origin.origin) };
 const context = base => ({ ...base, DB: store.DB, OWNER_IDS: owners().map(row => row.id).join(',') });
 const app = async (request, base) => {
   const path = new URL(request.url).pathname;
@@ -63,6 +65,7 @@ schedule('Service transfers', 5000, context => runBulkMigrations(context, { sign
 schedule('Private messages', 5000, context => processMessageJobs(context, (userId, text) =>
   deliverToInbox(context, 'sendMessage', { chat_id: userId, text: text.replace(/[&<>]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' })[c]) }),
   { signal: shutdown.signal }));
+schedule('App notifications', 5000, sendPendingPush);
 console.log('Asan Gozar store API is listening on loopback.');
 
 async function stop() {

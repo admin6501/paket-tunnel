@@ -10,6 +10,8 @@ import { processMessageJobs } from '../messages.js';
 import { panelURL } from '../panel-config.js';
 import { fileURLToPath } from 'node:url';
 import { loadStorePages, webStorePage } from '../site.mjs';
+import { createPushConfig, sendPendingPush } from '../push.mjs';
+import webPush from 'web-push';
 
 const origin = 'https://store.example';
 const password = 'unique-long-test-password';
@@ -21,6 +23,7 @@ async function fixture(t) {
   const owner = sqlite.prepare('INSERT INTO store_accounts(username,display_name,salt,password_hash,owner,created_at) VALUES (?,?,?,?,1,?) RETURNING id')
     .get('owner', 'Shop Owner', hash.salt, hash.password_hash, Date.now());
   const env = { DB, STORE_SECRET: '0'.repeat(64), WEB_SHOP_ORIGIN: origin, OWNER_IDS: String(owner.id),
+    WEB_SHOP_PUSH: createPushConfig('0'.repeat(64), origin),
     PANEL_URL: 'https://panel.example', PANEL_USER: 'admin', PANEL_PASS: 'fixture',
     CARD_NUMBER: '1234123412341234', CARD_HOLDER: 'Fixture' };
   return { sqlite, env, owner };
@@ -71,6 +74,54 @@ function browser(env, ip) {
 
 const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
 const image = Buffer.from(testJPEG).toString('base64');
+
+test('web app alerts are opt-in, restricted to staff and delivered once for each new ticket, reply and receipt', async t => {
+  const { env, sqlite } = await fixture(t);
+  const admin = browser(env, '192.0.2.208'), buyer = browser(env, '192.0.2.209');
+  await admin.request('login', { username: 'owner', password });
+  await buyer.request('register', { name: 'Buyer', username: 'buyer', password });
+  const endpoint = 'https://fcm.googleapis.com/fcm/send/test-device';
+  const keys = { p256dh: createPushConfig('a'.repeat(64), origin).publicKey, auth: Buffer.alloc(16, 1).toString('base64url') };
+  assert.equal((await buyer.request('admin/push/subscribe', { endpoint, keys })).status, 403);
+  assert.deepEqual((await admin.request('admin/push')).data, { publicKey: env.WEB_SHOP_PUSH.publicKey });
+  assert.equal((await admin.request('admin/push/subscribe', { endpoint: 'https://example.net/unrecognized', keys })).status, 400);
+  assert.equal((await admin.request('admin/push/subscribe', { endpoint, keys }, 'https://other.example')).status, 403);
+  assert.deepEqual((await admin.request('admin/push/subscribe', { endpoint, keys })).data, { enabled: true });
+  assert.deepEqual((await admin.request('admin/push/status', { endpoint })).data, { enabled: true });
+  const opened = await buyer.request('tickets', { department: 1, subject: 'private subject', message: 'private message' });
+  assert.equal(opened.status, 201);
+  const ticket = opened.data.id;
+  assert.equal((await buyer.request(`tickets/${ticket}/reply`, { version: 0, message: 'another message' })).status, 200);
+  assert.equal((await admin.request(`admin/tickets/${ticket}/reply`, { version: 1, message: 'staff note', internal: true })).status, 200);
+  sqlite.exec(`INSERT INTO web_shop_receipts VALUES('order',42,'photo',1),('topup',43,'photo',1);
+    UPDATE web_shop_receipts SET image='same upload',expires_at=1;`);
+  assert.equal((await admin.request('admin/push/test', { endpoint })).status, 200);
+  const received = [];
+  await sendPendingPush(env, async (device, payload, options) => {
+    assert.equal(device.endpoint, endpoint);
+    const encrypted = webPush.generateRequestDetails(device, payload, options);
+    assert.ok(encrypted.body.length > 0);
+    assert.equal(encrypted.headers['Content-Encoding'], 'aes128gcm');
+    assert.doesNotMatch(payload, /private|another message|staff note|same upload/);
+    received.push(JSON.parse(payload));
+  });
+  assert.deepEqual(received.map(item => item.path), [
+    `/account.html?staffTicket=${ticket}#tickets`, `/account.html?staffTicket=${ticket}#tickets`,
+    '/account.html?receipt=order:42#receipts', '/account.html?receipt=topup:43#receipts', '/account.html',
+  ]);
+  assert.equal(new Set(received.map(item => item.tag)).size, 5);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM store_push_jobs').get().n, 0);
+  assert.equal((await admin.request('admin/push/test', { endpoint })).status, 200);
+  await sendPendingPush(env, async () => { throw Object.assign(new Error('Service busy'), { statusCode: 503 }); });
+  assert.equal(sqlite.prepare('SELECT attempts FROM store_push_jobs').get().attempts, 1);
+  sqlite.exec('UPDATE store_push_jobs SET next_at=0');
+  await sendPendingPush(env, async () => { throw Object.assign(new Error('Subscription expired'), { statusCode: 410 }); });
+  assert.deepEqual((await admin.request('admin/push/status', { endpoint })).data, { enabled: false });
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM store_push_jobs').get().n, 0);
+  assert.equal((await admin.request('admin/push/subscribe', { endpoint, keys })).status, 200);
+  assert.equal((await admin.request('logout', { pushEndpoint: endpoint })).status, 200);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM store_push_subscriptions').get().n, 0);
+});
 
 test('ticket queue routes private threads, replies, assignments and existing inbox requests', async t => {
   const { env, sqlite, owner } = await fixture(t);
@@ -227,6 +278,11 @@ test('admin branding is quoted safely and published across every store page and 
     assert.equal(response.headers.get('x-store-template-sha256'), page.templateSha, path);
     if (path === '/favicon.svg') {
       assert.match(markup, />ش<\/text>/u);
+      continue;
+    }
+    if (path === '/app.webmanifest') {
+      assert.equal(JSON.parse(markup).name, name);
+      assert.equal(JSON.parse(markup).display, 'standalone');
       continue;
     }
     assert.match(markup, /data-store-brand="شبکهٔ «نوین» &amp; &quot;همراه&quot;"/u, path);
@@ -471,8 +527,11 @@ test('card purchase and wallet top-up are reviewed in the web admin without an e
   await buyer.act({kind:'image', image});
   assert.equal(sqlite.prepare('SELECT status FROM orders').get().status,'pending');
   assert.equal((await buyer.request('action',{kind:'image',image,revision:oldRevision})).status,409);
+  assert.equal((await buyer.request('action',{kind:'receipt',action:'web:receipt:order:'+order.id,revision:buyer.state.revision})).status,400);
+  assert.equal((await admin.act({kind:'receipt',action:'web:receipt:order:'+order.id})).messages[0].photo,
+    '/shop/api/receipt?kind=order&id='+order.id);
 
-  for (const action of ['admin:root','web:orders','web:receipt:order:'+order.id]) await admin.press(action);
+  for (const action of ['web:orders','web:receipt:order:'+order.id]) await admin.press(action);
   assert.equal((await buyer.request('receipt?kind=order&id='+order.id)).status,403);
   assert.deepEqual((await admin.request('receipt?kind=order&id='+order.id)).data,testJPEG);
   const approveRev = admin.state.revision;
