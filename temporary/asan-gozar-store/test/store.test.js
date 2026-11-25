@@ -71,6 +71,56 @@ function browser(env, ip) {
 const testJPEG = Uint8Array.of(0xff,0xd8,0xff,0xd9);
 const image = Buffer.from(testJPEG).toString('base64');
 
+test('ticket queue routes private threads, replies, assignments and existing inbox requests', async t => {
+  const { env, sqlite, owner } = await fixture(t);
+  const admin = browser(env, '192.0.2.123'), buyer = browser(env, '192.0.2.124'), stranger = browser(env, '192.0.2.125');
+  assert.equal((await buyer.request('tickets')).status, 401);
+  assert.equal((await admin.request('login', { username: 'owner', password })).status, 200);
+  assert.equal((await buyer.request('register', { name: 'Buyer', username: 'buyer', password })).status, 200);
+  assert.equal((await stranger.request('register', { name: 'Stranger', username: 'stranger', password })).status, 200);
+  assert.equal((await buyer.request('admin/tickets')).status, 403);
+  const departments = (await buyer.request('tickets/departments')).data.departments;
+  assert.equal(departments.length, 3);
+  const opened = await buyer.request('tickets', { department: departments[0].id, subject: 'مشکل اتصال', message: 'توضیح اول' });
+  assert.equal(opened.status, 201);
+  const id = opened.data.id;
+  assert.match(JSON.stringify((await admin.request('inbox')).data), new RegExp('staffTicket=' + id));
+  assert.equal((await stranger.request('tickets/' + id)).status, 404);
+  assert.equal((await stranger.request('tickets/' + id + '/reply', { version: 0, message: 'forbidden' })).status, 404);
+  const queue = await admin.request('admin/tickets?status=active&q=buyer');
+  assert.equal(queue.data.tickets.length, 1);
+  const base = 'admin/tickets/' + id;
+  assert.equal((await admin.request(base + '/update', { version: 0, status: 'in_progress', department: 3, priority: 'urgent', assignee: owner.id })).status, 200);
+  assert.equal((await admin.request(base + '/update', { version: 0, status: 'closed', department: 3, priority: 'normal', assignee: null })).status, 409);
+  assert.equal((await admin.request('admin/tickets?assignment=mine&department=3')).data.tickets[0].id, id);
+  assert.equal((await admin.request(base + '/reply', { version: 1, internal: true, message: 'یادداشت خصوصی' })).status, 200);
+  assert.equal((await admin.request(base + '/reply', { version: 2, message: 'لطفاً نتیجه را بفرستید' })).status, 200);
+  const customer = (await buyer.request('tickets/' + id)).data;
+  assert.equal(customer.ticket.status, 'waiting_customer');
+  assert.deepEqual(customer.messages.map(message => message.kind), ['customer', 'staff']);
+  assert.match(JSON.stringify((await buyer.request('inbox')).data), new RegExp('ticket=' + id));
+  assert.equal((await buyer.request('tickets/' + id + '/reply', { version: 3, message: 'نتیجهٔ مشتری' })).status, 200);
+  assert.equal((await admin.request(base)).data.ticket.status, 'open');
+  assert.equal((await buyer.request('tickets/' + id + '/update', { version: 4, status: 'resolved' })).status, 403);
+  assert.equal((await buyer.request('tickets/' + id + '/update', { version: 4, status: 'closed' })).status, 200);
+  assert.equal((await buyer.request('tickets/' + id + '/reply', { version: 5, message: 'بسته است' })).status, 409);
+  assert.equal((await buyer.request('tickets/' + id + '/update', { version: 5, status: 'open' })).status, 200);
+
+  const inactive = { id: 3, name: 'فنی شبکه', description: 'نیاز به بررسی', active: false };
+  assert.equal((await admin.request('admin/tickets/departments', inactive)).status, 200);
+  assert.ok(!(await buyer.request('tickets/departments')).data.departments.some(unit => unit.id === 3));
+  assert.equal((await buyer.request('tickets', { department: 3, subject: 'آزمایش', message: 'رد شود' })).status, 409);
+  assert.equal((await admin.request(base)).data.ticket.department, 'فنی شبکه');
+  const buyerId = sqlite.prepare("SELECT id FROM store_accounts WHERE username='buyer'").get().id;
+  const old = await deliverToInbox(env, 'sendMessage', { chat_id: owner.id,
+    text: `درخواست پشتیبانی از کاربر ${buyerId} (@buyer):\nپیام قدیمی &lt;متن&gt;` });
+  const messageId = old.result.message_id;
+  const imported = await admin.request('admin/tickets/import-inbox', { messageId });
+  assert.equal(imported.status, 201);
+  assert.deepEqual((await admin.request('admin/tickets/import-inbox', { messageId })).data, imported.data);
+  assert.equal((await buyer.request('tickets/' + imported.data.id)).data.messages[0].body, 'پیام قدیمی <متن>');
+});
+
 test('admin branding is quoted safely and published across every store page and icon', async t => {
   const { env, sqlite } = await fixture(t);
   const guest = browser(env, '192.0.2.92');
@@ -229,7 +279,7 @@ test('customers change their own passwords and administrators reset only custome
   assert.equal((await admin.request('session')).data.signedIn, true);
 });
 
-test('standalone signup, local admin role, session rotation and private support inbox', async t => {
+test('standalone signup, local admin role, session rotation and private inbox', async t => {
   const { sqlite, env } = await fixture(t);
   t.mock.method(globalThis, 'fetch', async () => { throw Error('No outbound fetch expected'); });
   const guest = browser(env,'192.0.2.10'), admin = browser(env,'192.0.2.11');
@@ -243,8 +293,7 @@ test('standalone signup, local admin role, session rotation and private support 
   assert.equal(sqlite.prepare("SELECT owner FROM store_accounts WHERE username='buyer'").get().owner, 0);
   assert.equal((await guest.request('action',{kind:'button',action:'admin:root',revision:guest.state.revision})).status, 400);
   assert.equal((await guest.request('receipt?kind=order&id=1')).status, 403);
-  await guest.press('support');
-  await guest.act({kind:'text',text:'درخواست آزمایشی'});
+  assert.ok(guest.buttons().includes('web:tickets'));
   const customerId = sqlite.prepare("SELECT id FROM store_accounts WHERE username='buyer'").get().id;
   assert.equal((await admin.request('login',{username:'owner',password:'incorrect-strong-password'})).status, 401);
   assert.equal((await admin.request('login',{username:'owner',password})).status, 200);
@@ -253,8 +302,7 @@ test('standalone signup, local admin role, session rotation and private support 
   assert.ok(admin.buttons().includes('admin:plans'));
   assert.ok(admin.buttons().includes('admin:categories'));
   assert.ok(!admin.buttons().some(action=>action?.includes('broadcast')));
-  assert.match(JSON.stringify((await admin.request('inbox')).data), /درخواست آزمایشی/);
-  assert.doesNotMatch(JSON.stringify((await guest.request('inbox')).data), /درخواست آزمایشی/);
+  assert.ok(admin.buttons().includes('web:ticket-admin'));
 
   await admin.press('admin:users:0');
   await admin.press('admin:user:'+customerId);
@@ -263,6 +311,7 @@ test('standalone signup, local admin role, session rotation and private support 
   await admin.press(admin.buttons().find(action=>action?.startsWith('admin:message_send:')));
   await processMessageJobs(env,(id,text)=>deliverToInbox(env,'sendMessage',{chat_id:id,text}));
   assert.match(JSON.stringify((await guest.request('inbox')).data), /پاسخ پشتیبانی/);
+  assert.doesNotMatch(JSON.stringify((await admin.request('inbox')).data), /پاسخ پشتیبانی/);
 
   const replacement = browser(env,'192.0.2.12');
   assert.equal((await replacement.request('login',{username:'buyer',password})).status,200);

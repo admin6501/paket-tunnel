@@ -204,3 +204,32 @@ body.light #status.error { color: #a42234; }
   .network-intro { grid-template-columns: 1fr; }
   .info-cards { grid-template-columns: 1fr; }
 }
+
+#ticket-panel { margin-block: 1.2rem 0; }
+.ticket-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .8rem; }
+.ticket-toolbar h2 { margin: 0; font-size: clamp(1.14rem, 3vw, 1.6rem); overflow-wrap: anywhere; min-width: 0; }
+.ticket-form { display: grid; gap: .75rem; padding: 1rem; margin-block: .9rem; border: 1px solid var(--line); border-radius: .85rem; background: var(--bg); }
+.ticket-form > button { justify-self: start; }
+.ticket-filters { display: flex; align-items: end; flex-wrap: wrap; }
+#app .ticket-field { display: grid; gap: .35rem; min-width: 0; margin: 0; }
+.ticket-field > span { font-size: .9rem; font-weight: 700; }
+#app .ticket-field :is(input,textarea,select) { width: 100%; min-height: 2.75rem; resize: vertical; }
+.ticket-field select {
+  color: var(--text); border: 1px solid var(--line); border-radius: .65rem; padding: .47rem .7rem;
+  background: var(--surface); font: inherit;
+}
+.ticket-list { list-style: none; padding: 0; display: grid; gap: .6rem; }
+.ticket-list > li { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .85rem; border: 1px solid var(--line); border-radius: .75rem; padding: .65rem .85rem; }
+.ticket-list > li > button { max-width: 100%; overflow-wrap: anywhere; }
+.ticket-meta, .ticket-empty { color: var(--muted); font-size: .9rem; }
+.ticket-pill { background: var(--surface2); border: 1px solid var(--line); border-radius: .65rem; padding: .05rem .5rem; font-size: .82rem; font-weight: 750; }
+.ticket-thread { display: grid; gap: .65rem; margin-block: .85rem; }
+.ticket-message { border: 1px solid var(--line); border-inline-start: 3px solid var(--cyan); border-radius: .75rem; background: var(--bg); padding: .7rem .9rem; }
+.ticket-message[data-kind=customer] { border-inline-start-color: var(--blue); }
+.ticket-message[data-kind=event], .ticket-message[data-kind=note] { border-inline-start-color: #c49a55; background: var(--surface2); }
+.ticket-message > header { display: flex; flex-wrap: wrap; gap: .25rem .65rem; align-items: center; }
+.ticket-message p { white-space: pre-wrap; overflow-wrap: anywhere; margin: .45rem 0 0; }
+@media (max-width: 520px) {
+  .ticket-filters .ticket-field { flex-basis: 100%; }
+  .ticket-toolbar { align-items: flex-start; }
+}

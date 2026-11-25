@@ -14,9 +14,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css?v=5">
-  <link rel="stylesheet" href="/store.css?v=5">
+  <link rel="stylesheet" href="/store.css?v=6">
   <script src="/script.js?v=5" defer></script>
-  <script src="/store.js?v=5" defer></script>
+  <script src="/tickets.js?v=6" defer></script>
+  <script src="/store.js?v=6" defer></script>
 
   <meta property="og:description" content="تعرفه‌های آسان‌گذر را ببینید، سرویس خود را بخرید و اشتراک و پرداخت‌هایتان را از حساب کاربری پیگیری کنید.">
   <meta property="og:site_name" content="آسان‌گذر">
@@ -66,6 +67,7 @@
       <section id="account" hidden aria-label="حساب فروشگاه">
         <div class="actions">
           <button type="button" id="home" class="secondary">منوی فروشگاه</button>
+          <button type="button" id="tickets-open" class="secondary" aria-controls="ticket-panel">تیکت‌های من</button>
           <button type="button" id="inbox-open" class="secondary">صندوق پیام</button>
           <button type="button" id="refresh" class="secondary">تازه‌سازی</button>
           <button type="button" id="password-open" class="secondary" aria-controls="password-change" aria-expanded="false">تغییر رمز عبور</button>
@@ -186,6 +188,7 @@
             <button type="button" class="secondary" id="inbox-read" hidden>علامت‌گذاری به‌عنوان خوانده‌شده</button>
           </div>
         </section>
+        <section id="ticket-panel" hidden tabindex="-1" aria-label="پشتیبانی و تیکت‌ها"></section>
         <div id="messages" aria-live="polite"></div>
         <form id="reply" hidden>
           <label for="reply-value" id="reply-label">پاسخ</label>

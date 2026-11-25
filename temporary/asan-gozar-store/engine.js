@@ -723,7 +723,7 @@ const mainMenuKb = (env) => {
   rows.push(
     [btn("🎁 کد دعوت من", "invite_code"), btn("➕ ثبت کد دعوت", "enter_invite")],
     [btn("📲 دانلود اپلیکیشن‌ها", "apps_menu")],
-    [btn("🆘 پشتیبانی", "support")],
+    [btn('پشتیبانی و تیکت‌ها', 'web:tickets')],
   );
   if (env.admins?.has(env.actor)) rows.push([btn("🛠 پنل مدیریت", "admin:root")]);
   return kb(rows);
@@ -1493,6 +1493,7 @@ async function handleAdminUICallback(c, cq, answer) {
     delete st.admin_ui_step; delete st.admin_ui_key;
     const keyboard = adminHomeKb();
     if (env.WEB_STATE) keyboard.inline_keyboard.unshift([btn('فیش‌های در انتظار', 'web:orders'), btn('اطلاعیه بالای سایت', 'web:notice')]);
+    if (env.WEB_STATE) keyboard.inline_keyboard.unshift([btn('مدیریت تیکت‌ها و دپارتمان‌ها', 'web:ticket-admin')]);
     if (env.WEB_STATE && owner) keyboard.inline_keyboard.push([btn('پشتیبان‌گیری و بازیابی', 'web:backup')]);
     return renderAdmin("🛠 <b>پنل مدیریت فروشگاه</b>\n\nبخش موردنظر را انتخاب کنید:", keyboard);
   }
@@ -1995,18 +1996,6 @@ async function onMessage(c, msg) {
 
   const st = c.st;
   if (text) {
-    if (st.step === 'support') {
-      const text = msg.text.trim();
-      if (!text || text.length > 2000) return sendMsg(env, uid, 'متن درخواست را در حداکثر ۲۰۰۰ نویسه بنویسید.', backKb('support'));
-      const owners = [...env.owners];
-      if (!owners.length) return sendMsg(env, uid, 'پشتیبانی هنوز تنظیم نشده است.', backKb());
-      for (const owner of owners) {
-        await deliverToInbox(env, 'sendMessage', { chat_id: owner, text: `درخواست پشتیبانی از کاربر ${uid} (@${esc(msg.from.username)}):
-${esc(text)}` });
-      }
-      delete st.step;
-      return sendMsg(env, uid, 'درخواست ثبت شد. پاسخ را در صندوق پیام ببینید.', backKb());
-    }
     if (st.step === "coupon_code") {
       const id=Number(st.order_id);if(!Number.isSafeInteger(id)||id<=0){delete st.step;return sendMsg(env,msg.chat.id,"سفارش پیدا نشد.",backKb())}
       try {
@@ -2562,8 +2551,8 @@ async function onCallback(c, cq) {
   }
 
   if (d === 'support') {
-    st.step = 'support';
-    return render(env, cq, 'درخواست پشتیبانی خود را بنویسید. پاسخ در صندوق پیام همین سایت نمایش داده می‌شود.', backKb());
+    delete st.step;
+    return render(env, cq, 'درخواست پشتیبانی را از بخش تیکت‌ها ثبت و پیگیری کنید.', kb([[btn('پشتیبانی و تیکت‌ها', 'web:tickets')]]));
   }
 
   if (d === "apps_menu") {
