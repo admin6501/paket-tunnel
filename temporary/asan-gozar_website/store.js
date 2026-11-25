@@ -19,6 +19,10 @@ let nextMessage = null;
 let newestMessage = null;
 let resetTarget = null;
 let panelTrigger = null;
+let supportLink = location.hash === '#tickets';
+const supportParams = new URLSearchParams(location.search);
+const linkedTicket = Number(supportParams.get('ticket') || supportParams.get('staffTicket'));
+const tickets = setupTickets(get('ticket-panel'), api, perform, refresh, displayText);
 
 function announce(text = '', error = false) {
   status.textContent = text;
@@ -95,6 +99,7 @@ function show(newState) {
   document.dispatchEvent(new CustomEvent('shop:session', { detail: { signedIn: state.signedIn } }));
   get('login').hidden = state.signedIn;
   get('account').hidden = !state.signedIn;
+  tickets.close();
   closeAccountForms();
   if (!state.signedIn) {
     messages.replaceChildren();
@@ -147,6 +152,10 @@ function show(newState) {
           button.type = 'button';
           button.textContent = displayText(option.text).trim();
           button.addEventListener('click', () => {
+            if (['web:tickets', 'web:ticket-admin', 'support'].includes(option.action)) {
+              void perform(() => openSupport(option.action === 'web:ticket-admin'));
+              return;
+            }
             if (option.action === 'web:brand') {
               openAccountForm('brand-editor', 'brand-name', button);
               get('brand-name').value = siteBrand;
@@ -210,7 +219,7 @@ async function perform(task) {
   } catch (error) {
     if (error.status === 401) show({ signedIn: false });
     announce(error.name === 'TimeoutError'
-      ? 'زمان پاسخ تمام شد. قبل از تکرار پرداخت، صفحه را تازه کنید.'
+      ? (tickets.visible ? 'زمان پاسخ تمام شد. پیش از ارسال دوباره، تیکت را تازه‌سازی کنید.' : 'زمان پاسخ تمام شد. پیش از تکرار عملیات، صفحه را تازه کنید.')
       : (error.message || 'ارتباط برقرار نشد.'), true);
   } finally {
     setBusy(false);
@@ -224,6 +233,18 @@ async function action(body) {
 async function refresh() {
   show(await api('state'));
   if (state.signedIn && !state.messages.length) await action({ kind: 'home' });
+  if (state.signedIn && supportLink) {
+    supportLink = false;
+    await openSupport(state.admin && supportParams.has('staffTicket'), Number.isSafeInteger(linkedTicket) && linkedTicket > 0 ? linkedTicket : null);
+  }
+}
+
+async function openSupport(admin, id) {
+  await tickets.open(admin, id);
+  closeAccountForms();
+  get('inbox').hidden = true;
+  messages.hidden = true;
+  reply.hidden = true;
 }
 
 function closeAccountForms() {
@@ -394,6 +415,7 @@ get('auth').addEventListener('submit', event => {
 async function loadInbox(more = false) {
   closeAccountForms();
   const { messages: entries, next } = await api(more ? `inbox?before=${nextMessage}` : 'inbox');
+  tickets.close();
   get('inbox').hidden = false;
   messages.hidden = true;
   reply.hidden = true;
@@ -413,6 +435,19 @@ async function loadInbox(more = false) {
     content.className = 'message-content';
     renderHTML(entry.html, content);
     card.append(time, content);
+    if (state.admin && /^درخواست پشتیبانی از کاربر \d+ \(@[^\n]*\):\n/u.test(entry.html)) {
+      const convert = document.createElement('button');
+      convert.type = 'button';
+      convert.textContent = 'تبدیل به تیکت';
+      convert.className = 'secondary';
+      convert.addEventListener('click', () => {
+        void perform(async () => {
+          const { id } = await api('admin/tickets/import-inbox', { messageId: entry.id });
+          await openSupport(true, id);
+        });
+      });
+      card.append(convert);
+    }
     container.append(card);
   }
   if (!more && entries.length === 0) container.textContent = 'هنوز پیامی دریافت نکرده‌اید.';
@@ -422,6 +457,7 @@ async function loadInbox(more = false) {
 }
 
 get('inbox-open').addEventListener('click', () => { void perform(loadInbox); });
+get('tickets-open').addEventListener('click', () => { void perform(() => openSupport(false)); });
 get('inbox-more').addEventListener('click', () => { void perform(() => loadInbox(true)); });
 get('inbox-read').addEventListener('click', () => {
   void perform(async () => {
@@ -434,7 +470,9 @@ get('home').addEventListener('click', () => {
   if (state.input === 'image' && !window.confirm('به منو برگردم؟ پیش‌نویس فعلی ممکن است لغو شود.')) return;
   void perform(() => action({ kind: 'home' }));
 });
-get('refresh').addEventListener('click', () => { void perform(get('inbox').hidden ? refresh : loadInbox); });
+get('refresh').addEventListener('click', () => {
+  void perform(tickets.visible ? tickets.refresh : get('inbox').hidden ? refresh : loadInbox);
+});
 get('logout').addEventListener('click', () => { void perform(async () => show(await api('logout', {}))); });
 reply.addEventListener('submit', event => {
   event.preventDefault();

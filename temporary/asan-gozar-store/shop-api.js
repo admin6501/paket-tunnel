@@ -2,6 +2,7 @@ import { checkPassword, hashPassword, validPassword, validUsername } from './aut
 import { deliverToInbox } from './inbox.js';
 import { BACKUP_LIMIT, BackupError } from './backups.mjs';
 import { BRAND_KEY, brandText, readBrand, validBrandName } from './brand.mjs';
+import { ticketRequest } from './tickets.mjs';
 
 const PREFIX = '/shop/api/';
 const SESSION_COOKIE = '__Host-ag-session';
@@ -90,7 +91,7 @@ function rows(markup) {
 function publicState(session) {
   const { step, admin_ui_step, admin_step } = JSON.parse(session.state_json);
   const input = ['panel_pass','mp_pass','mpedit_pass'].includes(admin_ui_step) ? 'password'
-    : (admin_ui_step || admin_step || ['purchase_name_choice','service_name','test_name','wallet_amount','invite_code_input','coupon_code','support'].includes(step)) ? 'text'
+    : (admin_ui_step || admin_step || ['purchase_name_choice','service_name','test_name','wallet_amount','invite_code_input','coupon_code'].includes(step)) ? 'text'
     : ['receipt','wallet_receipt'].includes(step) ? 'image' : null;
   return { signedIn: true, admin: Boolean(session.admin_access), revision: session.revision, messages: JSON.parse(session.view_json), input };
 }
@@ -379,6 +380,12 @@ export async function webShopRequest(request, env, update) {
   }
   if (route === 'session' && request.method === 'GET') return json({ signedIn: true });
   if (route === 'state' && request.method === 'GET') return json(publicState(session));
+  if (/^(admin\/)?tickets(?:\/|$)/.test(route)) {
+    if (request.method === 'POST' && await limited(env, `ticket:${session.user_id}`, route === 'tickets' ? 8 : 30)) {
+      return json({ error: 'لطفاً کمی صبر کنید و دوباره تلاش کنید.' }, 429);
+    }
+    return ticketRequest(request, env, { session, admin }, route, json, readBody);
+  }
   if (route === 'admin/brand' && request.method === 'POST') {
     if (!admin) return json({ error: 'دسترسی ندارید.' }, 403);
     const body = await readBody(request);
@@ -431,7 +438,7 @@ export async function webShopRequest(request, env, update) {
   const body = await readBody(request);
   if (!body || body.revision !== session.revision) return json({ error: 'صفحه را تازه کنید.' }, 409);
   const choices = JSON.parse(session.view_json).flatMap(message => message.rows.flat()).map(button => button.action)
-    .filter(action => !['web:backup','web:notice','web:brand'].includes(action) && !action?.startsWith('web:reset_password:'));
+    .filter(action => !['web:backup','web:notice','web:brand','web:tickets','web:ticket-admin'].includes(action) && !action?.startsWith('web:reset_password:'));
   const state = JSON.parse(session.state_json);
   const image = body.kind === 'image' && validImage(body.image);
   const input = publicState(session).input;

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { WEB_SHOP_SCHEMA } from './shop-schema.js';
+import { TICKET_SCHEMA } from './ticket-schema.mjs';
 
 export function openStore(path) {
   const filename = path === ':memory:' ? path : resolve(path);
@@ -11,6 +12,7 @@ export function openStore(path) {
   sqlite.exec('PRAGMA journal_mode=WAL;');
   sqlite.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
   sqlite.exec(WEB_SHOP_SCHEMA);
+  sqlite.exec(TICKET_SCHEMA);
   sqlite.exec("INSERT OR IGNORE INTO settings(key,value) VALUES ('test_enabled','0'),('referral_discount','0'),('panel_group_ids','')");
   const statement = (query, args = []) => ({
     bind: (...values) => statement(query, values),

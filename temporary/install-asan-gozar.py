@@ -222,7 +222,7 @@ def served_release(public, domain=DOMAIN, port=443):
     origin = f'https://{domain}:{port}'
     pages = {'/' + name: hashlib.sha256((public / name).read_bytes()).hexdigest().encode() for name in PAGE_NAMES}
     pages['/'] = pages['/index.html']
-    assets = {f'/{name}': (public / name).read_bytes() for name in ('storefront.js', 'store.css', 'store.js')}
+    assets = {f'/{name}': (public / name).read_bytes() for name in ('storefront.js', 'store.css', 'store.js', 'tickets.js')}
     failed = '/'
     loopback = ('--resolve', f'{domain}:{port}:127.0.0.1')
     for options in (loopback, (), loopback):
@@ -268,7 +268,7 @@ def main(archive):
         source = work / 'asan-gozar-store'
         public = work / 'asan_gozar_website'
         required = [source / 'package-lock.json', *(public / name for name in (
-            *PAGE_NAMES, 'store.js', 'store.css', 'prices.js', 'storefront.js', 'server-room.webp'))]
+            *PAGE_NAMES, 'store.js', 'store.css', 'prices.js', 'storefront.js', 'tickets.js', 'server-room.webp'))]
         if not all(path.is_file() for path in required):
             raise ValueError('The archive is missing required store files.')
         if APP.is_symlink() or RUNTIME.is_symlink() or SNIPPET.is_symlink():
